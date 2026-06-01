@@ -53,7 +53,10 @@ def log_string(out_str, log_file):
     # helper function to log a string to file and print it
     log_file.write(out_str + '\n')
     log_file.flush()
-    print(out_str)
+    try:
+        print(out_str)
+    except (OSError, UnicodeEncodeError):
+        print(out_str.encode('utf-8', errors='replace').decode('utf-8'))
 
 
 def setup_logdir_only_log(logdir, args=None):

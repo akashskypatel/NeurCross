@@ -1,0 +1,13 @@
+.claude/
+AGENTS.md
+CLAUDE.md
+.gitnexus/
+NeurCross.code-workspace
+**/__pycache__/
+**/.pytest_cache/
+*.log
+*.pyc
+*.txt
+*.egg
+*.egg-info
+*.ini

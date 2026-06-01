@@ -1,0 +1,25 @@
+[build-system]
+requires = [
+    "setuptools>=64",
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "NeurCross"
+version = "0.1"
+description = "Neural cross field project"
+license = "AGPL-3.0"
+
+dependencies = [
+    "numpy",
+    "scipy",
+    "torch",
+    "torchinfo",
+    "timm",
+    "trimesh",
+    "torch_kmeans"
+]
+
+[tool.setuptools]
+packages = ["neurcross"]
