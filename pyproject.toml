@@ -1,15 +1,17 @@
 [build-system]
 requires = [
-    "setuptools>=64",
+    "setuptools>=70.1",
     "wheel"
 ]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "NeurCross"
-version = "0.1"
+version = "0.1.0"
 description = "Neural cross field project"
-license = "AGPL-3.0"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "AGPL-3.0-only"
 
 dependencies = [
     "numpy",
@@ -21,5 +23,20 @@ dependencies = [
     "torch_kmeans"
 ]
 
+[project.scripts]
+neurcross-train-quad-mesh = "quad_mesh.train_quad_mesh:main"
+
 [tool.setuptools]
-packages = ["neurcross"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = [
+    "models",
+    "models.*",
+    "quad_mesh",
+    "quad_mesh.*",
+    "utils",
+    "utils.*",
+    "neurcross",
+    "neurcross.*"
+]

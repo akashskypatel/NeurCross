@@ -11,3 +11,5 @@ NeurCross.code-workspace
 *.egg
 *.egg-info
 *.ini
+dist/*
+build/*

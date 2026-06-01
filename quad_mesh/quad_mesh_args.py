@@ -1,14 +1,28 @@
 import argparse
 import os
 
-def add_args(parser):
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    default_data_path = os.path.join(repo_root, 'data', 'doubleTorus', 'input', 'doubleTorus.ply')
 
-    parser.add_argument('--logdir', type=str, default='./output/', help='log directory')
+def _default_data_path():
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidate = os.path.join(repo_root, 'data', 'doubleTorus', 'input', 'doubleTorus.ply')
+    return candidate if os.path.exists(candidate) else None
+
+
+def add_args(parser):
+    parser.add_argument(
+        '--logdir',
+        type=str,
+        default=None,
+        help='optional output directory; if omitted, outputs are written beside the input mesh',
+    )
     parser.add_argument('--model_name', type=str, default='model', help='trained model name')
     parser.add_argument('--seed', type=int, default=3627473, help='random seed')
-    parser.add_argument('--data_path', type=str, default=default_data_path, help='path to input dir')
+    parser.add_argument(
+        '--data_path',
+        type=str,
+        default=_default_data_path(),
+        help='path to input mesh; required when running from an installed wheel without repo data files',
+    )
     parser.add_argument('--n_samples', type=int, default=10,
                         help='numbers of epochs')
     parser.add_argument('--n_points', type=int, default=15000, help='number of points in each point cloud')

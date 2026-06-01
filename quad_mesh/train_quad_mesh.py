@@ -28,9 +28,19 @@ warnings.filterwarnings(
 def main():
     # get training parameters
     args = quad_mesh_args.get_args()
+    if not args.data_path:
+        raise ValueError('No default training mesh is bundled in the wheel build. Pass --data_path to a mesh file.')
 
+    mesh_dir = os.path.dirname(os.path.abspath(args.data_path))
     file_name = os.path.splitext(os.path.basename(args.data_path))[0]
-    logdir = os.path.join(args.logdir, file_name)
+    if args.logdir is None:
+        logdir_root = mesh_dir
+    elif os.path.isabs(args.logdir):
+        logdir_root = args.logdir
+    else:
+        logdir_root = os.path.join(mesh_dir, args.logdir)
+
+    logdir = os.path.join(logdir_root, file_name)
     os.makedirs(logdir, exist_ok=True)
 
     # set up logging
