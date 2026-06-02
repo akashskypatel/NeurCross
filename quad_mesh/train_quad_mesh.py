@@ -16,6 +16,7 @@ from models import Network_predict_angle
 from models import MorseLoss_quad_mesh as MorseLoss
 import utils.utils as utils
 import quad_mesh_args
+from extract_quad_mesh import extract_quad_mesh_from_network
 
 import quad_mesh_dataset as dataset
 
@@ -172,6 +173,27 @@ def main():
 
             criterion.update_morse_weight(epoch * args.n_samples + batch_idx, args.num_epochs * args.n_samples,
                                           args.decay_params)  # assumes batch size of 1
+
+    if not args.no_extract_quad_mesh:
+        output_path = args.quad_mesh_output
+        if output_path is None:
+            output_path = os.path.join(logdir, f'{file_name}_quad.obj')
+        result = extract_quad_mesh_from_network(
+            net=net,
+            recon_dataset=train_set,
+            mesh_path=args.data_path,
+            device=device,
+            output_path=output_path,
+        )
+        utils.log_string(
+            'Extracted quad mesh: {} (extractor={}, boundary_edges={}, components={})'.format(
+                result["output_path"],
+                result["extractor"],
+                result["topology"]["boundary_edges"],
+                result["topology"]["components"],
+            ),
+            log_file,
+        )
 
 
 if __name__ == '__main__':

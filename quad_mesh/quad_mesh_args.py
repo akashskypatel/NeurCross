@@ -36,6 +36,10 @@ def add_args(parser):
     parser.add_argument('--grad_clip_norm', type=float, default=10.0, help='Value to clip gradients to')
     parser.add_argument('--batch_size', type=int, default=1, help='number of samples in a minibatch')
     parser.add_argument('--load_path', type=str, default=None)
+    parser.add_argument('--no_extract_quad_mesh', action='store_true',
+                        help='disable quad mesh extraction after training completes')
+    parser.add_argument('--quad_mesh_output', type=str, default=None,
+                        help='optional OBJ output path for the extracted quad mesh')
 
     # Network architecture and loss
     parser.add_argument('--init_type', type=str, default='siren',

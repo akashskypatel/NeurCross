@@ -13,3 +13,4 @@ NeurCross.code-workspace
 *.ini
 dist/*
 build/*
+.paper/

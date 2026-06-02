@@ -76,6 +76,16 @@ You can also override parameters from the command line:
 python train_quad_mesh.py --data_path D:\path\to\mesh.ply --n_samples 10000 --lr 5e-5
 ```
 
+Estimated runtime from the paper: for a triangular mesh with 50,000 faces, each optimization iteration takes about `68.34 ms`, and the default research setting uses `10,000` iterations. That corresponds to roughly `683.4` seconds, or about `11.4` minutes, for one full run under that configuration. Actual runtime in this repository will vary with GPU, PyTorch/CUDA version, mesh complexity, and your chosen `--n_samples` setting.
+
+By default, training now also runs quad extraction at the end of optimization and writes an OBJ mesh beside the input mesh. For the sample input, the extracted mesh is written to:
+
+```text
+data/doubleTorus/input/doubleTorus/doubleTorus_quad.obj
+```
+
+The extraction step uses the predicted cross field, a libigl-based seam/UV solve, and `pyqex` quad extraction.
+
 ## `quad_mesh_args.py` Reference
 
 The training entry point accepts the following arguments.
@@ -95,6 +105,8 @@ The training entry point accepts the following arguments.
 | `--grad_clip_norm` | `10.0` | Gradient clipping threshold. Set to `0` or a negative value to disable clipping. |
 | `--batch_size` | `1` | Mini-batch size used by the PyTorch `DataLoader`. Larger values require more GPU memory. |
 | `--load_path` | `None` | Optional checkpoint path. If provided, the model weights are loaded before training continues. |
+| `--no_extract_quad_mesh` | disabled | Disables the automatic quad mesh extraction step that runs after training. |
+| `--quad_mesh_output` | `None` | Optional explicit OBJ output path for the extracted quad mesh. If omitted, the mesh is written beside the input mesh under a subdirectory named after the input file. |
 | `--init_type` | `siren` | Decoder initialization strategy. The help text lists `siren`, `geometric_sine`, `geometric_relu`, and `mfgi`. |
 | `--decoder_hidden_dim` | `256` | Width of the decoder hidden layers. |
 | `--decoder_n_hidden_layers` | `4` | Number of hidden layers used in the decoder network. |
@@ -124,8 +136,9 @@ Notes:
 
 ## Extraction
 
-The extractor is from [libigl](https://libigl.github.io/)
-and [libQEx](https://github.com/hcebke/libQEx).
+The extraction stage in this repository uses [libigl](https://libigl.github.io/)
+for cross-field combing, seam cutting, and UV construction, and [libQEx](https://github.com/hcebke/libQEx)
+through the Python `pyqex` binding for quad extraction.
 
 
 ## Cite
