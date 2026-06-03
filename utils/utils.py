@@ -96,6 +96,7 @@ def save_only_crossField(vector_alpha, vector_beta, batch_idx=None, output_dir=N
 
     cross_field_save_path = os.path.join(output_dir, shapename + '_iter_{}.txt'.format(batch_idx))
     np.savetxt(cross_field_save_path, cross_field)
+    return cross_field_save_path
 
 
 def count_parameters(model):

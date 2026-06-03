@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 
 import utils.utils as utils
+from quad_mesh.crossfield_to_rosy import convert_crossfield
 
 
 def eikonal_loss(nonmnfld_grad, mnfld_grad, eikonal_type='abs'):
@@ -26,7 +27,8 @@ def eikonal_loss(nonmnfld_grad, mnfld_grad, eikonal_type='abs'):
 class MorseLoss_quad_mesh(nn.Module):
     def __init__(self, weights=None, loss_type='siren_wo_n_w_morse', div_decay='none',
                  div_type='l1', vertex_neighbors_list=None,
-                 vertex_neighbors=None, axis_angle_R_mat_list=None, device=None):
+                 vertex_neighbors=None, axis_angle_R_mat_list=None, device=None,
+                 convert_crossfield_to_rosy=False):
         super().__init__()
         if weights is None:
             weights = [7e3, 6e2, 10, 5e1, 30, 3]
@@ -39,6 +41,7 @@ class MorseLoss_quad_mesh(nn.Module):
         self.vertex_neighbors = vertex_neighbors
         self.axis_angle_R_mat_list = axis_angle_R_mat_list
         self.device = device
+        self.convert_crossfield_to_rosy = convert_crossfield_to_rosy
 
 
 
@@ -166,8 +169,15 @@ class MorseLoss_quad_mesh(nn.Module):
         # get the grad, curvature of the points
         if save_best:
             output_dir = os.path.join(logdir, 'save_crossField')
-            utils.save_only_crossField(vector_alpha, vector_beta, batch_idx=batch_idx, output_dir=output_dir,
-                                       shapename=filename)
+            cross_field_path = utils.save_only_crossField(
+                vector_alpha,
+                vector_beta,
+                batch_idx=batch_idx,
+                output_dir=output_dir,
+                shapename=filename,
+            )
+            if self.convert_crossfield_to_rosy:
+                convert_crossfield(cross_field_path)
 
         # losses used in the paper
         if self.loss_type == 'siren_wo_n_w_morse_w_theta':

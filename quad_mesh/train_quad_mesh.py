@@ -104,7 +104,8 @@ def main():
     criterion = MorseLoss(weights=args.loss_weights, loss_type=args.loss_type, div_decay=args.morse_decay,
                           div_type=args.morse_type,
                           vertex_neighbors_list=vertex_neighbors_list,
-                          vertex_neighbors=vertex_neighbors, axis_angle_R_mat_list=axis_angle_R_mat_list, device=device
+                          vertex_neighbors=vertex_neighbors, axis_angle_R_mat_list=axis_angle_R_mat_list,
+                          device=device, convert_crossfield_to_rosy=args.convert_crossfield_to_rosy
                           )
 
     # For each epoch

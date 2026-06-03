@@ -64,6 +64,11 @@ def add_args(parser):
     parser.add_argument('--relax_morse', type=float, default=0.5, help='the max value of relax Morse')
     parser.add_argument('--use_vertices', type=bool, default=False, help='if False, sample points to overfitting')
     parser.add_argument('--featureLine_threshold', type=float, default=1.0)
+    parser.add_argument(
+        '--convert_crossfield_to_rosy',
+        action='store_true',
+        help='if set, also convert each saved cross-field snapshot to a QuadWild-compatible .rosy sidecar file',
+    )
 
 
     return parser

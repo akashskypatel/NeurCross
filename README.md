@@ -61,6 +61,12 @@ The wheel packages the Python modules and exposes a console entry point:
 neurcross-train-quad-mesh --data_path D:\path\to\mesh.ply
 ```
 
+It also exposes a conversion helper for downstream QuadWild-compatible `.rosy` files:
+
+```powershell
+neurcross-crossfield-to-rosy D:\path\to\crossfield.txt
+```
+
 The source checkout includes `data/doubleTorus/input/doubleTorus.ply`, so `--data_path` can be omitted when training from the repo. The wheel does not bundle sample training data, so `--data_path` is required after installation.
 
 ## Overfitting
@@ -75,6 +81,8 @@ You can also override parameters from the command line:
 ```powershell
 python train_quad_mesh.py --data_path D:\path\to\mesh.ply --n_samples 10000 --lr 5e-5
 ```
+
+Estimated runtime from the paper: for a triangular mesh with 50,000 faces, each optimization iteration takes about `68.34 ms`, and the default research setting uses `10,000` iterations. That corresponds to roughly `683.4` seconds, or about `11.4` minutes, for one full run under that configuration. Actual runtime in this repository will vary with GPU, PyTorch/CUDA version, mesh complexity, and your chosen `--n_samples` setting.
 
 ## `quad_mesh_args.py` Reference
 
@@ -114,6 +122,7 @@ The training entry point accepts the following arguments.
 | `--relax_morse` | `0.5` | Upper bound used by the relaxed Morse formulation. |
 | `--use_vertices` | `False` | Controls whether to use vertices directly instead of the default sampled points. The code comment suggests `False` is used to avoid overfitting. |
 | `--featureLine_threshold` | `1.0` | Threshold related to feature-line behavior in the cross-field pipeline. |
+| `--convert_crossfield_to_rosy` | disabled | If enabled, every saved `save_crossField/*.txt` snapshot is also converted into a QuadWild-compatible `.rosy` sidecar file. |
 
 Notes:
 
@@ -122,11 +131,27 @@ Notes:
 - Some arguments are preserved from the original research code even when the current training path uses them lightly or not at all. The table above reflects the behavior of the current repository state.
 
 
-## Extraction
+### Cross-field To `.rosy`
 
-The extractor is from [libigl](https://libigl.github.io/)
-and [libQEx](https://github.com/hcebke/libQEx).
+NeurCross saves intermediate cross-field snapshots under:
 
+```text
+<logdir>\<mesh-name>\save_crossField\
+```
+
+If `--convert_crossfield_to_rosy` is enabled, each saved `*_iter_<n>.txt` cross-field file is also accompanied by a QuadWild-compatible `*_iter_<n>.rosy` sidecar file during training.
+
+You can also convert a saved cross-field file manually:
+
+```powershell
+python -m quad_mesh.crossfield_to_rosy D:\path\to\crossfield_iter_499.txt
+```
+
+or, after installation:
+
+```powershell
+neurcross-crossfield-to-rosy D:\path\to\crossfield_iter_499.txt
+```
 
 ## Cite
 
@@ -154,6 +179,5 @@ doi={10.1145/3731159}
 Our code is inspired by [NeurCADRecon](https://github.com/QiujieDong/NeurCADRecon)
 and [SIREN](https://github.com/vsitzmann/siren).
 We would like to thank the authors
-of [libigl](https://libigl.github.io/)
-and [libQEx](https://github.com/hcebke/libQEx).
+of [pyquadwild](https://github.com/dickoah/pyquadwild).
 
