@@ -1,23 +1,8 @@
 import os
-import sys
 import warnings
 from multiprocessing import freeze_support
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import numpy as np
-import torch
-import torch.optim as optim
-try:
-    from torchinfo import summary
-except ImportError:
-    summary = None
-
-from models import Network_predict_angle
-from models import MorseLoss_quad_mesh as MorseLoss
-import utils.utils as utils
-import quad_mesh_args
-
-import quad_mesh_dataset as dataset
+from . import quad_mesh_args
 
 warnings.filterwarnings(
     'ignore',
@@ -25,11 +10,49 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
+
+def _load_runtime_dependencies():
+    import numpy as np
+    import torch
+    import torch.optim as optim
+
+    try:
+        from torchinfo import summary
+    except ImportError:
+        summary = None
+
+    from models import Network_predict_angle
+    from models import MorseLoss_quad_mesh as MorseLoss
+    import utils.utils as utils
+    from . import quad_mesh_dataset as dataset
+
+    return {
+        'np': np,
+        'torch': torch,
+        'optim': optim,
+        'summary': summary,
+        'Network_predict_angle': Network_predict_angle,
+        'MorseLoss': MorseLoss,
+        'utils': utils,
+        'dataset': dataset,
+    }
+
+
 def main():
     # get training parameters
     args = quad_mesh_args.get_args()
     if not args.data_path:
         raise ValueError('No default training mesh is bundled in the wheel build. Pass --data_path to a mesh file.')
+
+    deps = _load_runtime_dependencies()
+    np = deps['np']
+    torch = deps['torch']
+    optim = deps['optim']
+    summary = deps['summary']
+    Network_predict_angle = deps['Network_predict_angle']
+    MorseLoss = deps['MorseLoss']
+    utils = deps['utils']
+    dataset = deps['dataset']
 
     mesh_dir = os.path.dirname(os.path.abspath(args.data_path))
     file_name = os.path.splitext(os.path.basename(args.data_path))[0]
