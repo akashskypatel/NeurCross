@@ -61,6 +61,14 @@ The wheel packages the Python modules and exposes a console entry point:
 neurcross-train-quad-mesh --data_path D:\path\to\mesh.ply
 ```
 
+The package also exposes a high-level module entry point:
+
+```powershell
+python -m neurcross --help
+python -m neurcross train-quad-mesh --help
+python -m neurcross crossfield-to-rosy --help
+```
+
 It also exposes a conversion helper for downstream QuadWild-compatible `.rosy` files:
 
 ```powershell
@@ -82,6 +90,12 @@ You can also override parameters from the command line:
 python train_quad_mesh.py --data_path D:\path\to\mesh.ply --n_samples 10000 --lr 5e-5
 ```
 
+Equivalent installed-package usage:
+
+```powershell
+python -m neurcross train-quad-mesh --data_path D:\path\to\mesh.ply --out_dir D:\path\to\output
+```
+
 Estimated runtime from the paper: for a triangular mesh with 50,000 faces, each optimization iteration takes about `68.34 ms`, and the default research setting uses `10,000` iterations. That corresponds to roughly `683.4` seconds, or about `11.4` minutes, for one full run under that configuration. Actual runtime in this repository will vary with GPU, PyTorch/CUDA version, mesh complexity, and your chosen `--n_samples` setting.
 
 ## `quad_mesh_args.py` Reference
@@ -90,7 +104,7 @@ The training entry point accepts the following arguments.
 
 | Argument | Default | Purpose |
 | --- | --- | --- |
-| `--logdir` | `./output/` | Output directory used for logs and training artifacts. The script creates a subdirectory named after the input mesh file. |
+| `--out_dir` | `./output/` | Output directory used for logs and training artifacts. The script creates a subdirectory named after the input mesh file. |
 | `--model_name` | `model` | Model name placeholder for saved artifacts. The current training script keeps it for compatibility with the original project setup. |
 | `--seed` | `3627473` | Random seed applied to PyTorch, NumPy, and Python's `random` module for reproducible runs. |
 | `--data_path` | repo sample mesh if available, otherwise `None` | Path to the input surface mesh used for training. This must point to a mesh file supported by `trimesh`. It is required when running from an installed wheel. |
@@ -103,6 +117,9 @@ The training entry point accepts the following arguments.
 | `--grad_clip_norm` | `10.0` | Gradient clipping threshold. Set to `0` or a negative value to disable clipping. |
 | `--batch_size` | `1` | Mini-batch size used by the PyTorch `DataLoader`. Larger values require more GPU memory. |
 | `--load_path` | `None` | Optional checkpoint path. If provided, the model weights are loaded before training continues. |
+| `--num_workers` | `4` | Number of `DataLoader` worker processes used for training batches. |
+| `--persistent_workers` | disabled | Keeps `DataLoader` workers alive across epochs to reduce worker startup overhead. |
+| `--fast_nondeterministic` | disabled | Allows faster nondeterministic CUDA/cuDNN behavior instead of fully deterministic seeding. |
 | `--init_type` | `siren` | Decoder initialization strategy. The help text lists `siren`, `geometric_sine`, `geometric_relu`, and `mfgi`. |
 | `--decoder_hidden_dim` | `256` | Width of the decoder hidden layers. |
 | `--decoder_n_hidden_layers` | `4` | Number of hidden layers used in the decoder network. |
@@ -123,6 +140,15 @@ The training entry point accepts the following arguments.
 | `--use_vertices` | `False` | Controls whether to use vertices directly instead of the default sampled points. The code comment suggests `False` is used to avoid overfitting. |
 | `--featureLine_threshold` | `1.0` | Threshold related to feature-line behavior in the cross-field pipeline. |
 | `--convert_crossfield_to_rosy` | disabled | If enabled, every saved `save_crossField/*.txt` snapshot is also converted into a QuadWild-compatible `.rosy` sidecar file. |
+| `--early_stop` | disabled | Enables early stopping based on smoothed loss plateau detection and optional theta-term thresholds. |
+| `--early_stop_min_steps` | `1000` | Minimum number of global training steps before early stopping can trigger. |
+| `--early_stop_patience` | `500` | Number of steps without sufficient smoothed-loss improvement before plateau stopping triggers. |
+| `--early_stop_min_delta` | `1e-3` | Minimum smoothed-loss improvement required to reset early-stop patience. |
+| `--early_stop_smooth_window` | `50` | Moving-average window size used for smoothing the total loss for early stopping. |
+| `--early_stop_check_interval` | `10` | Evaluate the early-stop controller every `N` global steps. |
+| `--early_stop_target_loss` | `None` | Optional smoothed total-loss target that can stop training once the minimum-step guard is satisfied. |
+| `--early_stop_theta_neighbor_threshold` | `None` | Optional maximum unweighted theta-neighbor term required before early stopping is allowed. |
+| `--early_stop_theta_hessian_threshold` | `None` | Optional maximum unweighted theta-hessian term required before early stopping is allowed. |
 
 Notes:
 
@@ -130,16 +156,53 @@ Notes:
 - `--use_morse_nonmnfld_grad` and `--use_vertices` use `type=bool`, so if you pass them explicitly on the command line, use forms such as `--use_vertices True` or `--use_vertices False`.
 - Some arguments are preserved from the original research code even when the current training path uses them lightly or not at all. The table above reflects the behavior of the current repository state.
 
+## Early Stopping
+
+NeurCross supports opt-in early stopping based on smoothed total-loss plateau detection. This is intended as a practical time-saving guard, not a replacement for downstream field or remeshing validation.
+
+Example:
+
+```powershell
+python -m neurcross train-quad-mesh `
+  --data_path D:\path\to\mesh.ply `
+  --out_dir D:\path\to\output `
+  --num_epochs 20 `
+  --early_stop `
+  --early_stop_min_steps 2000 `
+  --early_stop_patience 1000 `
+  --early_stop_smooth_window 100 `
+  --early_stop_theta_neighbor_threshold 1e-3 `
+  --early_stop_theta_hessian_threshold 1e-3
+```
+
+When early stopping triggers, the current field is still exported and marked as the final output.
 
 ### Cross-field To `.rosy`
 
 NeurCross saves intermediate cross-field snapshots under:
 
 ```text
-<logdir>\<mesh-name>\save_crossField\
+<out_dir>\<mesh-name>\save_crossField\
 ```
 
-If `--convert_crossfield_to_rosy` is enabled, each saved `*_iter_<n>.txt` cross-field file is also accompanied by a QuadWild-compatible `*_iter_<n>.rosy` sidecar file during training.
+The current export manager preserves history snapshots and also maintains stable aliases for downstream tools:
+
+```text
+save_crossField\
+  <mesh-name>_iter_<global_step>.txt
+  <mesh-name>_latest.txt
+  <mesh-name>_best.txt
+  <mesh-name>_final.txt
+  <mesh-name>_latest.meta.txt
+  <mesh-name>_best.meta.txt
+  <mesh-name>_final.meta.txt
+```
+
+`latest` is overwritten every export, `best` is updated when the field-quality score improves, and `final` is written when training completes or stops early.
+
+If `--convert_crossfield_to_rosy` is enabled, these `.txt` outputs also receive QuadWild-compatible `.rosy` sidecars during training.
+
+The preserved `*_iter_<global_step>.txt` snapshots use the global training step, so multi-epoch runs no longer overwrite earlier exports.
 
 You can also convert a saved cross-field file manually:
 
@@ -152,6 +215,34 @@ or, after installation:
 ```powershell
 neurcross-crossfield-to-rosy D:\path\to\crossfield_iter_499.txt
 ```
+
+## Metrics Reporting
+
+Every preserved cross-field export has a matching JSON metrics report under:
+
+```text
+<out_dir>\<mesh-name>\metrics\
+```
+
+The metrics directory contains:
+
+```text
+metrics\
+  <mesh-name>_iter_<global_step>.json
+  <mesh-name>_latest.json
+  <mesh-name>_best.json
+  <mesh-name>_final.json
+```
+
+Each report records:
+
+- training losses: total, manifold, non-manifold, eikonal, Morse, theta-Hessian, theta-neighbor
+- field-validity metrics: tangency, norm error, orthogonality, handedness, flipped-frame ratio, NaN count
+- field-smoothness metrics: adjacent cross-field error mean, median, p95, and max
+- singularity proxy metrics
+- a composite field score used to rank `best`
+
+The current `best` snapshot is selected using a field-oriented score derived from theta alignment, neighboring smoothness, tangency error, and flipped-frame ratio.
 
 ## Cite
 

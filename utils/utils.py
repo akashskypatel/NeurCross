@@ -1,6 +1,7 @@
 import os
 import random
 import warnings
+from datetime import datetime
 
 import trimesh
 
@@ -13,7 +14,7 @@ from operator import itemgetter
 from itertools import groupby
 
 
-def same_seed(seed):
+def same_seed(seed, deterministic=True):
     """
 
     :param seed:
@@ -25,8 +26,8 @@ def same_seed(seed):
         torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
-    cudnn.benchmark = False
-    cudnn.deterministic = True
+    cudnn.benchmark = not deterministic
+    cudnn.deterministic = deterministic
 
 
 def normalize_mesh_export(mesh, file_out=None):
@@ -51,19 +52,22 @@ def normalize_mesh_export(mesh, file_out=None):
 
 def log_string(out_str, log_file):
     # helper function to log a string to file and print it
-    log_file.write(out_str + '\n')
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    lines = out_str.splitlines() or ['']
+    formatted = '\n'.join(f'[{timestamp}] {line}' for line in lines)
+    log_file.write(formatted + '\n')
     log_file.flush()
     try:
-        print(out_str)
+        print(formatted)
     except (OSError, UnicodeEncodeError):
-        print(out_str.encode('utf-8', errors='replace').decode('utf-8'))
+        print(formatted.encode('utf-8', errors='replace').decode('utf-8'))
 
 
-def setup_logdir_only_log(logdir, args=None):
+def setup_out_dir_only_log(out_dir, args=None):
     # helper function to set up logging directory
 
-    os.makedirs(logdir, exist_ok=True)
-    log_filename = os.path.join(logdir, 'out.log')
+    os.makedirs(out_dir, exist_ok=True)
+    log_filename = os.path.join(out_dir, 'out.log')
     log_file = open(log_filename, 'w')
 
     if args is not None:

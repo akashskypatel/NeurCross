@@ -10,7 +10,7 @@ def _default_data_path():
 
 def add_args(parser):
     parser.add_argument(
-        '--logdir',
+        '--out_dir',
         type=str,
         default=None,
         help='optional output directory; if omitted, outputs are written beside the input mesh',
@@ -23,9 +23,18 @@ def add_args(parser):
         default=_default_data_path(),
         help='path to input mesh; required when running from an installed wheel without repo data files',
     )
-    parser.add_argument('--n_samples', type=int, default=10,
-                        help='numbers of epochs')
-    parser.add_argument('--n_points', type=int, default=15000, help='number of points in each point cloud')
+    parser.add_argument(
+        '--n_samples',
+        type=int,
+        default=10,
+        help='number of training samples (batches) per epoch; this controls steps-per-epoch when batch_size=1',
+    )
+    parser.add_argument(
+        '--n_points',
+        type=int,
+        default=15000,
+        help='number of sampled points generated inside each training batch; this does not control epoch length',
+    )
     parser.add_argument('--grid_res', type=int, default=256, help='uniform grid resolution')
     parser.add_argument('--nonmnfld_sample_type', type=str, default='gaussian',
                         help='how to sample points off the manifold - grid | gaussian | combined')
@@ -36,6 +45,66 @@ def add_args(parser):
     parser.add_argument('--grad_clip_norm', type=float, default=10.0, help='Value to clip gradients to')
     parser.add_argument('--batch_size', type=int, default=1, help='number of samples in a minibatch')
     parser.add_argument('--load_path', type=str, default=None)
+    parser.add_argument('--num_workers', type=int, default=4, help='number of DataLoader worker processes')
+    parser.add_argument('--persistent_workers', action='store_true',
+                        help='keep DataLoader workers alive across epochs to reduce worker startup overhead')
+    parser.add_argument('--fast_nondeterministic', action='store_true',
+                        help='allow faster nondeterministic CUDA/cuDNN behavior instead of fully deterministic seeding')
+    parser.add_argument('--log_interval', type=int, default=10,
+                        help='number of batches between training log updates')
+    parser.add_argument(
+        '--early_stop',
+        action='store_true',
+        help='enable early stopping based on smoothed loss plateau and optional theta thresholds',
+    )
+    parser.add_argument(
+        '--early_stop_min_steps',
+        type=int,
+        default=1000,
+        help='minimum training steps before early stopping can trigger',
+    )
+    parser.add_argument(
+        '--early_stop_patience',
+        type=int,
+        default=500,
+        help='number of steps without sufficient smoothed-loss improvement before stopping',
+    )
+    parser.add_argument(
+        '--early_stop_min_delta',
+        type=float,
+        default=1e-3,
+        help='minimum smoothed-loss improvement required to reset early-stop patience',
+    )
+    parser.add_argument(
+        '--early_stop_smooth_window',
+        type=int,
+        default=50,
+        help='moving-average window size used for early stopping',
+    )
+    parser.add_argument(
+        '--early_stop_check_interval',
+        type=int,
+        default=10,
+        help='evaluate early stopping every N training steps',
+    )
+    parser.add_argument(
+        '--early_stop_target_loss',
+        type=float,
+        default=None,
+        help='optional smoothed total-loss target that can trigger early stopping once minimum steps are reached',
+    )
+    parser.add_argument(
+        '--early_stop_theta_neighbor_threshold',
+        type=float,
+        default=None,
+        help='optional maximum unweighted theta-neighbor term required before early stopping is allowed',
+    )
+    parser.add_argument(
+        '--early_stop_theta_hessian_threshold',
+        type=float,
+        default=None,
+        help='optional maximum unweighted theta-hessian term required before early stopping is allowed',
+    )
 
     # Network architecture and loss
     parser.add_argument('--init_type', type=str, default='siren',

@@ -26,6 +26,14 @@ class ReconDataset(data.Dataset):
         # record sigma
         self.sample_gaussian_noise_around_shape()
 
+    def get_static_batch(self):
+        return {
+            'points': self.points,
+            'mnfld_n': self.mnfld_n,
+            'local_coordinates_u': self.vector_u,
+            'local_coordinates_v': self.vector_v,
+        }
+
     def get_face_center_points(self):
         # Returns points on the manifold, the points are on the face center of the mesh
         points = np.asarray(self.mesh.triangles_center, dtype=np.float32)
@@ -71,22 +79,17 @@ class ReconDataset(data.Dataset):
         return
 
     def __getitem__(self, index):
-        manifold_points = self.points  # (n_points, 3)
-        manifold_normals = self.mnfld_n  # (n_points, 3)
-
         nonmnfld_points = np.random.uniform(-self.grid_range, self.grid_range,
                                             size=(self.n_points, 3)).astype(np.float32)  # (n_points // 2, 3)
 
-        near_points = (manifold_points + self.sigmas * np.random.randn(manifold_points.shape[0],
-                                                                       manifold_points.shape[1])).astype(
+        near_points = (self.points + self.sigmas * np.random.randn(self.points.shape[0],
+                                                                   self.points.shape[1])).astype(
             np.float32)
 
-        vector_u = self.vector_u
-        vector_v = self.vector_v
-
-
-        return {'points': manifold_points, 'mnfld_n': manifold_normals, 'nonmnfld_points': nonmnfld_points,
-                'near_points': near_points, 'local_coordinates_u': vector_u, 'local_coordinates_v': vector_v}
+        return {
+            'nonmnfld_points': nonmnfld_points,
+            'near_points': near_points,
+        }
 
     def __len__(self):
         return self.n_samples
