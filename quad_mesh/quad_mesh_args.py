@@ -26,8 +26,8 @@ def add_args(parser):
     parser.add_argument(
         '--n_samples',
         type=int,
-        default=10,
-        help='number of training samples (batches) per epoch; this controls steps-per-epoch when batch_size=1',
+        default=10000,
+        help='number of training samples (batches) per epoch; this controls steps-per-epoch when batch_size=1; recommended value is 10000',
     )
     parser.add_argument(
         '--n_points',

@@ -82,6 +82,7 @@ The installed package exposes a small programmatic API through `neurcross`:
 - `neurcross.train_crossfield(...)`
 - `neurcross.convert_crossfield_to_rosy(...)`
 - `neurcross.convert_crossfield_to_rawfield(...)`
+- `neurcross.convert_rawfield_to_rosy(...)`
 
 Example:
 
@@ -108,6 +109,10 @@ rosy_path = neurcross.convert_crossfield_to_rosy(
 
 rawfield_path = neurcross.convert_crossfield_to_rawfield(
     r"D:\path\to\output\mesh\save_crossField\mesh_final.txt"
+)
+
+rosy_from_rawfield_path = neurcross.convert_rawfield_to_rosy(
+    r"D:\path\to\field.rawfield"
 )
 ```
 
@@ -162,6 +167,8 @@ if __name__ == "__main__":
 `convert_crossfield_to_rosy(...)` reads a saved NeurCross `.txt` cross-field snapshot and writes a QuadWild-compatible `.rosy` file.
 
 `convert_crossfield_to_rawfield(...)` reads a saved NeurCross `.txt` cross-field snapshot and writes a Directional-compatible `.rawfield` file. This requires the snapshot rows to contain both cross-field branches, so each row must provide at least 6 floating-point values.
+
+`convert_rawfield_to_rosy(...)` reads a Directional-compatible `.rawfield` file and writes a `.rosy` file using the first tangent direction in each rawfield row.
 
 The source checkout includes `data/doubleTorus/input/doubleTorus.ply`, so `--data_path` can be omitted when training from the repo. The wheel does not bundle sample training data, so `--data_path` is required after installation.
 
@@ -299,6 +306,8 @@ You can also convert a saved cross-field file manually:
 neurcross-crossfield-to-rosy D:\path\to\crossfield_iter_499.txt
 # convert to rawfield format
 python -m quad_mesh.convert_crossfield D:\path\to\crossfield_iter_499.txt --format rawfield
+# convert rawfield back to rosy format
+python -m quad_mesh.convert_crossfield D:\path\to\field.rawfield --input-format rawfield --format rosy
 ```
 
 ## Metrics Reporting
