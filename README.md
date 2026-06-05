@@ -137,6 +137,28 @@ result = neurcross.train_crossfield(
 )
 ```
 
+On Windows, programmatic `train_crossfield(...)` calls force `num_workers=0` by default to avoid Python multiprocessing recursively re-importing the caller script. If you want DataLoader worker processes from your own Python script, guard the script entry point and opt in explicitly:
+
+```python
+from multiprocessing import freeze_support
+import neurcross
+
+
+def main():
+    result = neurcross.train_crossfield(
+        data_path=r"D:\path\to\mesh.ply",
+        out_dir=r"D:\path\to\output",
+        num_workers=4,
+        allow_multiprocessing_workers=True,
+    )
+    print(result.output_dir)
+
+
+if __name__ == "__main__":
+    freeze_support()
+    main()
+```
+
 `convert_crossfield_to_rosy(...)` reads a saved NeurCross `.txt` cross-field snapshot and writes a QuadWild-compatible `.rosy` file.
 
 `convert_crossfield_to_rawfield(...)` reads a saved NeurCross `.txt` cross-field snapshot and writes a Directional-compatible `.rawfield` file. This requires the snapshot rows to contain both cross-field branches, so each row must provide at least 6 floating-point values.

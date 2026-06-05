@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import warnings
 from dataclasses import dataclass
@@ -61,12 +62,27 @@ class TrainingResult:
 
 def _build_training_args(argv=None, args=None, **overrides):
     if args is None:
-        resolved = quad_mesh_args.get_args(argv)
+        resolved = quad_mesh_args.get_args([] if argv is None else argv)
     else:
         resolved = args
     for key, value in overrides.items():
         setattr(resolved, key, value)
     return resolved
+
+
+def _configure_programmatic_dataloader_workers(args, *, allow_multiprocessing_workers):
+    if allow_multiprocessing_workers:
+        return
+    if os.name != 'nt' or int(getattr(args, 'num_workers', 0)) <= 0:
+        return
+    args.num_workers = 0
+    args.persistent_workers = False
+    print(
+        'NeurCross API note: forcing num_workers=0 on Windows for embedded training. '
+        'Use allow_multiprocessing_workers=True only from a script guarded by '
+        'if __name__ == "__main__".',
+        file=sys.stderr,
+    )
 
 
 class EarlyStopper:
@@ -142,9 +158,13 @@ class EarlyStopper:
         return None
 
 
-def train_crossfield(*, argv=None, args=None, **overrides):
+def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=False, **overrides):
     # get training parameters
     args = _build_training_args(argv=argv, args=args, **overrides)
+    _configure_programmatic_dataloader_workers(
+        args,
+        allow_multiprocessing_workers=allow_multiprocessing_workers,
+    )
     if not args.data_path:
         raise ValueError('No default training mesh is bundled in the wheel build. Pass --data_path to a mesh file.')
 
@@ -472,7 +492,9 @@ def train_crossfield(*, argv=None, args=None, **overrides):
 
 
 def main(argv=None):
-    train_crossfield(argv=argv)
+    if argv is None:
+        argv = sys.argv[1:]
+    train_crossfield(argv=argv, allow_multiprocessing_workers=True)
 
 
 if __name__ == '__main__':

@@ -3,10 +3,15 @@ __version__ = "0.1.0"
 from quad_mesh.train_quad_mesh import TrainingResult
 
 
-def train_crossfield(*, argv=None, args=None, **overrides):
+def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=False, **overrides):
     from quad_mesh.train_quad_mesh import train_crossfield as _train_crossfield
 
-    return _train_crossfield(argv=argv, args=args, **overrides)
+    return _train_crossfield(
+        argv=argv,
+        args=args,
+        allow_multiprocessing_workers=allow_multiprocessing_workers,
+        **overrides,
+    )
 
 
 def convert_crossfield_to_rosy(input_path, output_path=None):
