@@ -55,7 +55,7 @@ def main() -> None:
         return
 
     if command == "crossfield-to-rosy":
-        from quad_mesh.crossfield_to_rosy import main as convert_main
+        from quad_mesh.convert_crossfield import main as convert_main
 
         sys.argv = ["neurcross-crossfield-to-rosy", *command_args]
         convert_main()

@@ -75,6 +75,72 @@ It also exposes a conversion helper for downstream QuadWild-compatible `.rosy` f
 neurcross-crossfield-to-rosy D:\path\to\crossfield.txt
 ```
 
+## Using NeurCross From Another Python Module
+
+The installed package exposes a small programmatic API through `neurcross`:
+
+- `neurcross.train_crossfield(...)`
+- `neurcross.convert_crossfield_to_rosy(...)`
+- `neurcross.convert_crossfield_to_rawfield(...)`
+
+Example:
+
+```python
+import neurcross
+
+result = neurcross.train_crossfield(
+    data_path=r"D:\path\to\mesh.ply",
+    out_dir=r"D:\path\to\output",
+    n_samples=1000,
+    n_points=1000,
+    num_epochs=4,
+    fast_nondeterministic=True,
+)
+
+print(result.output_dir)
+print(result.log_path)
+print(result.total_elapsed_seconds)
+print(result.stopped_early)
+
+rosy_path = neurcross.convert_crossfield_to_rosy(
+    r"D:\path\to\output\mesh\save_crossField\mesh_final.txt"
+)
+
+rawfield_path = neurcross.convert_crossfield_to_rawfield(
+    r"D:\path\to\output\mesh\save_crossField\mesh_final.txt"
+)
+```
+
+`train_crossfield(...)` returns a `TrainingResult` object with:
+
+- `args`
+- `output_dir`
+- `log_path`
+- `mesh_name`
+- `total_elapsed_seconds`
+- `stopped_early`
+- `stop_summary`
+
+If you prefer CLI-style argument forwarding from Python, `train_crossfield` also accepts `argv`:
+
+```python
+import neurcross
+
+result = neurcross.train_crossfield(
+    argv=[
+        "--data_path", r"D:\path\to\mesh.ply",
+        "--out_dir", r"D:\path\to\output",
+        "--n_samples", "1000",
+        "--n_points", "1000",
+        "--num_epochs", "4",
+    ]
+)
+```
+
+`convert_crossfield_to_rosy(...)` reads a saved NeurCross `.txt` cross-field snapshot and writes a QuadWild-compatible `.rosy` file.
+
+`convert_crossfield_to_rawfield(...)` reads a saved NeurCross `.txt` cross-field snapshot and writes a Directional-compatible `.rawfield` file. This requires the snapshot rows to contain both cross-field branches, so each row must provide at least 6 floating-point values.
+
 The source checkout includes `data/doubleTorus/input/doubleTorus.ply`, so `--data_path` can be omitted when training from the repo. The wheel does not bundle sample training data, so `--data_path` is required after installation.
 
 ## Overfitting
@@ -207,13 +273,10 @@ The preserved `*_iter_<global_step>.txt` snapshots use the global training step,
 You can also convert a saved cross-field file manually:
 
 ```powershell
-python -m quad_mesh.crossfield_to_rosy D:\path\to\crossfield_iter_499.txt
-```
-
-or, after installation:
-
-```powershell
+# convert to rosy format
 neurcross-crossfield-to-rosy D:\path\to\crossfield_iter_499.txt
+# convert to rawfield format
+python -m quad_mesh.convert_crossfield D:\path\to\crossfield_iter_499.txt --format rawfield
 ```
 
 ## Metrics Reporting
@@ -271,4 +334,3 @@ Our code is inspired by [NeurCADRecon](https://github.com/QiujieDong/NeurCADReco
 and [SIREN](https://github.com/vsitzmann/siren).
 We would like to thank the authors
 of [pyquadwild](https://github.com/dickoah/pyquadwild).
-

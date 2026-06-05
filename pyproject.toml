@@ -25,7 +25,7 @@ dependencies = [
 
 [project.scripts]
 neurcross-train-quad-mesh = "quad_mesh.train_quad_mesh:main"
-neurcross-crossfield-to-rosy = "quad_mesh.crossfield_to_rosy:main"
+neurcross-crossfield-to-rosy = "quad_mesh.convert_crossfield:main"
 
 [tool.setuptools]
 include-package-data = true

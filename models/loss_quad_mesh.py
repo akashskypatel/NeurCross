@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 import utils.utils as utils
-from quad_mesh.crossfield_to_rosy import convert_crossfield
+from quad_mesh.convert_crossfield import convert_crossfield_to_rosy
 
 
 class CrossFieldExportManager:
@@ -33,7 +33,7 @@ class CrossFieldExportManager:
     def _copy_with_optional_rosy(self, source_path, target_path):
         shutil.copyfile(source_path, target_path)
         if self.convert_crossfield_to_rosy:
-            convert_crossfield(target_path)
+            convert_crossfield_to_rosy(target_path)
 
     def _write_meta(self, suffix, *, step, total_loss, field_score):
         with open(self._meta_path(suffix), 'w', encoding='utf-8', newline='\n') as handle:
@@ -74,7 +74,7 @@ class CrossFieldExportManager:
             shapename=self.filename,
         )
         if self.convert_crossfield_to_rosy:
-            convert_crossfield(history_path)
+            convert_crossfield_to_rosy(history_path)
         report["history_crossfield_path"] = history_path
 
         latest_path = self._sidecar_path('latest')

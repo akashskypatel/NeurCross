@@ -1,6 +1,7 @@
 import os
 import time
 import warnings
+from dataclasses import dataclass
 from multiprocessing import freeze_support
 
 from . import quad_mesh_args
@@ -45,6 +46,27 @@ def _format_duration(seconds: float) -> str:
     if minutes >= 1:
         return f"{int(minutes)}m {secs:.2f}s"
     return f"{seconds:.3f}s"
+
+
+@dataclass
+class TrainingResult:
+    args: object
+    output_dir: str
+    log_path: str
+    mesh_name: str
+    total_elapsed_seconds: float
+    stopped_early: bool
+    stop_summary: dict | None
+
+
+def _build_training_args(argv=None, args=None, **overrides):
+    if args is None:
+        resolved = quad_mesh_args.get_args(argv)
+    else:
+        resolved = args
+    for key, value in overrides.items():
+        setattr(resolved, key, value)
+    return resolved
 
 
 class EarlyStopper:
@@ -120,9 +142,9 @@ class EarlyStopper:
         return None
 
 
-def main():
+def train_crossfield(*, argv=None, args=None, **overrides):
     # get training parameters
-    args = quad_mesh_args.get_args()
+    args = _build_training_args(argv=argv, args=args, **overrides)
     if not args.data_path:
         raise ValueError('No default training mesh is bundled in the wheel build. Pass --data_path to a mesh file.')
 
@@ -436,7 +458,21 @@ def main():
         utils.log_string("Training stopped early in {}".format(_format_duration(total_elapsed)), log_file)
     else:
         utils.log_string("Training finished in {}".format(_format_duration(total_elapsed)), log_file)
+    log_path = log_file.name
     log_file.close()
+    return TrainingResult(
+        args=args,
+        output_dir=out_dir,
+        log_path=log_path,
+        mesh_name=file_name,
+        total_elapsed_seconds=total_elapsed,
+        stopped_early=stopped_early,
+        stop_summary=stop_summary,
+    )
+
+
+def main(argv=None):
+    train_crossfield(argv=argv)
 
 
 if __name__ == '__main__':

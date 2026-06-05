@@ -1,10 +1,12 @@
-from pathlib import Path
+from .convert_crossfield import (
+    convert_crossfield_to_rawfield,
+    convert_crossfield_to_rosy,
+)
+from .train_quad_mesh import TrainingResult, train_crossfield
 
-
-def convert_crossfield(input_path: Path, output_path: Path | None = None):
-    from .crossfield_to_rosy import convert_crossfield as _convert_crossfield
-
-    return _convert_crossfield(input_path, output_path)
-
-
-__all__ = ["convert_crossfield"]
+__all__ = [
+    "TrainingResult",
+    "convert_crossfield_to_rawfield",
+    "convert_crossfield_to_rosy",
+    "train_crossfield",
+]

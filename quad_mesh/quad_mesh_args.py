@@ -143,8 +143,12 @@ def add_args(parser):
     return parser
 
 
-def get_args():
+def build_parser():
     parser = argparse.ArgumentParser()
-    parser = add_args(parser)
-    args = parser.parse_args()
+    return add_args(parser)
+
+
+def get_args(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
     return args
