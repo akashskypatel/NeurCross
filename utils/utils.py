@@ -10,10 +10,6 @@ import torch
 from torch.autograd import grad
 import torch.backends.cudnn as cudnn
 
-from operator import itemgetter
-from itertools import groupby
-
-
 def same_seed(seed, deterministic=True):
     """
 
@@ -126,15 +122,10 @@ def get_sample_vers_neighbors_for_face_center_points_or_vertices(mesh_path):
     mesh = trimesh.load_mesh(mesh_path, process=False)
 
     face_adj = mesh.face_adjacency.astype(np.int32)
-    keys_col_1 = np.unique(face_adj[:, 0])
-    result_col_1_list = [list(face_adj[face_adj[:, 0] == key, 1]) for key in keys_col_1]
-    keys_col_2 = np.unique(face_adj[:, 1])
-    result_col_2_list = [list(face_adj[face_adj[:, 1] == key, 0]) for key in keys_col_2]
-    keys = np.concatenate((keys_col_1, keys_col_2), axis=0)
-    face_adj_neigh = result_col_1_list + result_col_2_list
-    face_adj_neigh_list = [list(map(itemgetter(1), g)) for k, g in
-                           groupby(sorted(zip(keys, face_adj_neigh), key=itemgetter(0)), key=itemgetter(0))]
-    vertex_neighbors = [sum(x, []) if isinstance(x[0], list) else x for x in face_adj_neigh_list]
+    vertex_neighbors = [[] for _ in range(len(mesh.faces))]
+    for face_a, face_b in face_adj:
+        vertex_neighbors[int(face_a)].append(int(face_b))
+        vertex_neighbors[int(face_b)].append(int(face_a))
 
     return vertex_neighbors
 
@@ -154,13 +145,17 @@ def transform_vectors_only_rotation(verct, trans):
     return transformed_vectors
 
 
-def original_the_edge_information_to_face_neighbor_list(face_adjacency, edge_info, neighbors_each_face):
+def original_the_edge_information_to_face_neighbor_list(face_adjacency, edge_info, neighbors_each_face, face_indices=None):
     info_map = {
         (min(f1, f2), max(f1, f2)): angle
         for (f1, f2), angle in zip(face_adjacency, edge_info)
     }
 
-    R = [[info_map[(min(f, n), max(f, n))] for n in neighbors] for f, neighbors in enumerate(neighbors_each_face)]
+    if face_indices is None:
+        face_indices = range(len(neighbors_each_face))
+
+    R = [[info_map[(min(int(f), int(n)), max(int(f), int(n)))] for n in neighbors]
+         for f, neighbors in zip(face_indices, neighbors_each_face)]
     R = np.array(R)
 
     return R
@@ -220,7 +215,8 @@ def get_rotation_matrix(vertex_neighbors_list, vertex_neighbors, mesh_path):
 
         # map the rota_axis on the edge to the face
         rota_axis_map_to_face = original_the_edge_information_to_face_neighbor_list(face_adjacency, rota_axis,
-                                                                                    vertex_neighbors_i)
+                                                                                    vertex_neighbors_i,
+                                                                                    idx)
         desired_axis_dot_axis = np.einsum('ijk,ijk->ij', desired_rota_axis_direction, rota_axis_map_to_face)
         flag = (desired_axis_dot_axis < 0)
         rota_axis_map_to_face[flag] = -rota_axis_map_to_face[flag]
@@ -228,7 +224,8 @@ def get_rotation_matrix(vertex_neighbors_list, vertex_neighbors, mesh_path):
         # map the dihedral angles on the edge to the face
         dihedral_angle_map_to_face = original_the_edge_information_to_face_neighbor_list(face_adjacency,
                                                                                          face_adjacency_angles,
-                                                                                         vertex_neighbors_i)
+                                                                                         vertex_neighbors_i,
+                                                                                         idx)
 
         axis_angle_R_mat = batch_axis_angle_to_rotation_matrix_only_rotation(rota_axis_map_to_face,
                                                                              dihedral_angle_map_to_face)
