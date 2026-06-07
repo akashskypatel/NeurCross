@@ -21,7 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
 
     convert = subparsers.add_parser(
-        "crossfield-to-rosy",
+        "convert",
         help="Convert a saved cross-field snapshot to a .rosy file.",
     )
     convert.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
@@ -29,11 +29,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.epilog = (
         "High-level functionality:\n"
         "  train-quad-mesh     Train NeurCross on a mesh to produce cross-field snapshots.\n"
-        "  crossfield-to-rosy  Convert a saved cross-field snapshot into a .rosy file.\n\n"
+        "  train               Alias for train-quad-mesh.\n"
+        "  convert  Convert cross-field, .rosy, or .rawfield files.\n\n"
         "Examples:\n"
         "  python -m neurcross --help\n"
         "  python -m neurcross train-quad-mesh --help\n"
-        "  python -m neurcross crossfield-to-rosy --help"
+        "  python -m neurcross train --help\n"
+        "  python -m neurcross convert --help"
     )
     return parser
 
@@ -47,17 +49,17 @@ def main() -> None:
 
     command, command_args = argv[0], argv[1:]
 
-    if command == "train-quad-mesh":
+    if command == "train-quad-mesh" or command == "train":
         from quad_mesh.train_quad_mesh import main as train_main
 
         sys.argv = ["neurcross-train-quad-mesh", *command_args]
         train_main()
         return
 
-    if command == "crossfield-to-rosy":
+    if command == "convert":
         from quad_mesh.convert_crossfield import main as convert_main
 
-        sys.argv = ["neurcross-crossfield-to-rosy", *command_args]
+        sys.argv = ["neurcross-convert", *command_args]
         convert_main()
         return
 
