@@ -32,13 +32,34 @@ def __getattr__(name):
         from .train_quad_mesh import TrainingResult
 
         return TrainingResult
+    if name in {
+        "CheckpointMetadata",
+        "TrainingCheckpoint",
+        "load_checkpoint",
+        "save_checkpoint",
+        "save_model_weights_only",
+    }:
+        from . import checkpoint_utils
+
+        return getattr(checkpoint_utils, name)
+    if name in {"load_trained_model", "predict_crossfield"}:
+        from . import inference
+
+        return getattr(inference, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
+    "CheckpointMetadata",
     "TrainingResult",
+    "TrainingCheckpoint",
     "convert_crossfield_to_rawfield",
     "convert_crossfield_to_rosy",
     "convert_rawfield_to_rosy",
+    "load_checkpoint",
+    "load_trained_model",
+    "predict_crossfield",
+    "save_checkpoint",
+    "save_model_weights_only",
     "train_crossfield",
 ]

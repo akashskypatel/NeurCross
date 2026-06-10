@@ -49,6 +49,25 @@ def _format_duration(seconds: float) -> str:
     return f"{seconds:.3f}s"
 
 
+def _resolve_device(torch, requested_device):
+    if requested_device == 'cpu':
+        return 'cpu'
+    if requested_device == 'cuda':
+        if not torch.cuda.is_available():
+            raise RuntimeError("--device cuda was requested, but CUDA is not available.")
+        return 'cuda'
+    return 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
+def _raise_cuda_oom_guidance(exc, *, context):
+    message = (
+        f"CUDA out of memory during {context}. "
+        "Try --device cpu, lower mesh complexity, or lower --max_topology_memory_gb to fail earlier. "
+        "The topology/neighbor tensors are driven by mesh connectivity and are not reduced by --n_points."
+    )
+    raise RuntimeError(message) from exc
+
+
 @dataclass
 class TrainingResult:
     args: object
@@ -58,6 +77,9 @@ class TrainingResult:
     total_elapsed_seconds: float
     stopped_early: bool
     stop_summary: dict | None
+    checkpoint_path: str | None = None
+    best_checkpoint_path: str | None = None
+    weights_path: str | None = None
 
 
 def _build_training_args(argv=None, args=None, **overrides):
@@ -159,6 +181,18 @@ class EarlyStopper:
 
 
 def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=False, **overrides):
+    from .checkpoint_utils import (
+        CheckpointMetadata,
+        TrainingCheckpoint,
+        capture_random_state,
+        load_checkpoint,
+        prune_old_checkpoints,
+        restore_random_state,
+        save_checkpoint,
+        save_model_weights_only,
+        utc_timestamp,
+    )
+
     # get training parameters
     args = _build_training_args(argv=argv, args=args, **overrides)
     _configure_programmatic_dataloader_workers(
@@ -188,15 +222,23 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
     out_dir = os.path.join(out_dir_root, file_name)
     os.makedirs(out_dir, exist_ok=True)
+    if args.checkpoint_dir is None:
+        checkpoint_dir = os.path.join(out_dir, "checkpoints")
+    elif os.path.isabs(args.checkpoint_dir):
+        checkpoint_dir = args.checkpoint_dir
+    else:
+        checkpoint_dir = os.path.join(out_dir, args.checkpoint_dir)
+    os.makedirs(checkpoint_dir, exist_ok=True)
     run_start_time = time.perf_counter()
 
     # set up logging
     log_file = utils.setup_out_dir_only_log(out_dir, args)
 
-    device = 'cpu' if not torch.cuda.is_available() else 'cuda'
+    device = _resolve_device(torch, args.device)
     if device == 'cuda':
         torch.cuda.set_device(0)
         torch.cuda.init()
+    utils.log_string("Training device: {}".format(device), log_file)
 
     # get data loaders
     utils.same_seed(args.seed, deterministic=not args.fast_nondeterministic)
@@ -248,6 +290,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                                 sphere_init_params=args.sphere_init_params, udf=args.udf)
 
     net.to(device)
+    if args.load_path is not None and args.load_checkpoint is not None:
+        raise ValueError("Use either --load_path for weights-only loading or --load_checkpoint for training resume, not both.")
     if args.load_path is not None:
         net.load_state_dict(torch.load(args.load_path))
         print('Loaded model from %s' % args.load_path)
@@ -264,6 +308,26 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
     # Setup Adam optimizers
     optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=0.0)
+    start_epoch = 0
+    start_batch_idx = -1
+    initial_global_step = 0
+    resumed_checkpoint = None
+    if args.load_checkpoint is not None:
+        resumed_checkpoint = load_checkpoint(args.load_checkpoint, device=device)
+        net.load_state_dict(resumed_checkpoint.model_state_dict)
+        optimizer.load_state_dict(resumed_checkpoint.optimizer_state_dict)
+        restore_random_state(resumed_checkpoint.random_state)
+        start_epoch = resumed_checkpoint.metadata.epoch
+        start_batch_idx = resumed_checkpoint.metadata.batch_idx
+        initial_global_step = resumed_checkpoint.metadata.global_step
+        utils.log_string(
+            "Resumed training from checkpoint: epoch={} batch_idx={} next_global_step={}".format(
+                start_epoch,
+                start_batch_idx,
+                initial_global_step,
+            ),
+            log_file,
+        )
     print('steps_per_epoch: ', steps_per_epoch)
     print('n_iterations: ', total_steps)
 
@@ -278,15 +342,20 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     ###################################################################################
     axis_angle_R_mat_list = utils.get_rotation_matrix(vertex_neighbors_list, vertex_neighbors, args.data_path)
 
-    criterion = MorseLoss(weights=args.loss_weights, loss_type=args.loss_type, div_decay=args.morse_decay,
-                          div_type=args.morse_type,
-                          vertex_neighbors_list=vertex_neighbors_list,
-                          vertex_neighbors=vertex_neighbors, axis_angle_R_mat_list=axis_angle_R_mat_list,
-                          device=device, convert_crossfield_to_rosy=args.convert_crossfield_to_rosy
-                          )
+    try:
+        criterion = MorseLoss(weights=args.loss_weights, loss_type=args.loss_type, div_decay=args.morse_decay,
+                              div_type=args.morse_type,
+                              vertex_neighbors_list=vertex_neighbors_list,
+                              vertex_neighbors=vertex_neighbors, axis_angle_R_mat_list=axis_angle_R_mat_list,
+                              device=device, convert_crossfield_to_rosy=args.convert_crossfield_to_rosy,
+                              max_topology_memory_gb=args.max_topology_memory_gb
+                              )
+    except torch.cuda.OutOfMemoryError as exc:
+        _raise_cuda_oom_guidance(exc, context="topology cache setup")
     from models.loss_quad_mesh import export_crossfield_snapshot
 
     early_stopper = None
+    loss_history = []
     if args.early_stop:
         early_stopper = EarlyStopper(
             min_steps=args.early_stop_min_steps,
@@ -312,15 +381,70 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             ),
             log_file,
         )
+    if resumed_checkpoint is not None:
+        loss_history = list(resumed_checkpoint.metadata.loss_history)
+        if early_stopper is not None and resumed_checkpoint.early_stopper_state:
+            early_stopper.history = list(resumed_checkpoint.early_stopper_state.get('history', []))
+            early_stopper.best_smooth_loss = resumed_checkpoint.early_stopper_state.get('best_smooth_loss', float('inf'))
+            early_stopper.best_step = resumed_checkpoint.early_stopper_state.get('best_step', -1)
 
     net.train()
     stopped_early = False
     stop_summary = None
+    checkpoint_path = None
+    best_checkpoint_path = None
+    weights_path = None
+    best_loss = min(loss_history) if loss_history else float('inf')
+    last_epoch = start_epoch
+    last_batch_idx = start_batch_idx
+    next_global_step = initial_global_step
+    current_global_step = initial_global_step
+
+    def _save_training_checkpoint(filename, epoch, batch_idx, next_global_step):
+        early_stopper_state = None
+        best_smooth_loss = best_loss
+        best_step = next_global_step - 1
+        if early_stopper is not None:
+            early_stopper_state = {
+                'history': list(early_stopper.history),
+                'best_smooth_loss': early_stopper.best_smooth_loss,
+                'best_step': early_stopper.best_step,
+            }
+            best_smooth_loss = early_stopper.best_smooth_loss
+            best_step = early_stopper.best_step
+        metadata = CheckpointMetadata(
+            epoch=epoch,
+            batch_idx=batch_idx,
+            global_step=next_global_step,
+            total_epochs=args.num_epochs,
+            total_steps=total_steps,
+            best_smooth_loss=float(best_smooth_loss),
+            best_step=int(best_step),
+            loss_history=list(loss_history),
+            args_dict=dict(vars(args)),
+            timestamp=utc_timestamp(),
+            device=device,
+        )
+        checkpoint = TrainingCheckpoint(
+            model_state_dict=net.state_dict(),
+            optimizer_state_dict=optimizer.state_dict(),
+            metadata=metadata,
+            early_stopper_state=early_stopper_state,
+            random_state=capture_random_state(),
+        )
+        return save_checkpoint(checkpoint, checkpoint_dir, filename=filename)
+
     # For each epoch
-    for epoch in range(args.num_epochs):
+    for epoch in range(start_epoch, args.num_epochs):
         for batch_idx, data in enumerate(train_dataloader):
+            if epoch == start_epoch and start_batch_idx >= 0 and batch_idx <= start_batch_idx:
+                continue
             batch_start_time = time.perf_counter()
-            global_step = epoch * len(train_dataloader) + batch_idx
+            global_step = current_global_step
+            last_epoch = epoch
+            last_batch_idx = batch_idx
+            next_global_step = global_step + 1
+            current_global_step = next_global_step
             if batch_idx != 0 and (batch_idx % 500 == 0 or batch_idx == steps_per_epoch - 1):
                 SAVE_BEST = True
             is_final_batch = epoch == args.num_epochs - 1 and batch_idx == steps_per_epoch - 1
@@ -336,20 +460,26 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
             features = torch.cat((mnfld_points, angle_feature_static), dim=-1)
 
-            output_pred, mnfld_pts_theta_output_pred = net(nonmnfld_points, mnfld_points,
-                                                           near_points=near_points if args.morse_near else None,
-                                                           angle_features=features)
+            try:
+                output_pred, mnfld_pts_theta_output_pred = net(nonmnfld_points, mnfld_points,
+                                                               near_points=near_points if args.morse_near else None,
+                                                               angle_features=features)
 
-            loss_dict = criterion(output_pred, mnfld_points, nonmnfld_points, mnfld_n_gt,
-                                  near_points=near_points if args.morse_near else None, batch_idx=global_step,
-                                  out_dir=out_dir, filename=file_name, save_best=SAVE_BEST,
-                                  mnfld_pts_theta_output_pred=mnfld_pts_theta_output_pred,
-                                  local_coord_u=local_coord_u, local_coord_v=local_coord_v,
-                                  is_final_export=is_final_batch)
+                loss_dict = criterion(output_pred, mnfld_points, nonmnfld_points, mnfld_n_gt,
+                                      near_points=near_points if args.morse_near else None, batch_idx=global_step,
+                                      out_dir=out_dir, filename=file_name, save_best=SAVE_BEST,
+                                      mnfld_pts_theta_output_pred=mnfld_pts_theta_output_pred,
+                                      local_coord_u=local_coord_u, local_coord_v=local_coord_v,
+                                      is_final_export=is_final_batch)
+            except torch.cuda.OutOfMemoryError as exc:
+                _raise_cuda_oom_guidance(exc, context="forward/loss computation")
 
             lr = optimizer.param_groups[0]['lr']
 
-            loss_dict["loss"].backward()
+            try:
+                loss_dict["loss"].backward()
+            except torch.cuda.OutOfMemoryError as exc:
+                _raise_cuda_oom_guidance(exc, context="backward pass")
 
             if args.grad_clip_norm > 0:
                 torch.nn.utils.clip_grad_norm_(net.parameters(), args.grad_clip_norm)
@@ -357,6 +487,33 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             SAVE_BEST = False
             optimizer.step()
             batch_elapsed = time.perf_counter() - batch_start_time
+            current_loss_value = float(loss_dict["loss"].detach().cpu().item())
+            loss_history.append(current_loss_value)
+            improved_loss = current_loss_value < best_loss
+            if improved_loss:
+                best_loss = current_loss_value
+                best_checkpoint_path = _save_training_checkpoint(
+                    "best_checkpoint.pt",
+                    epoch,
+                    batch_idx,
+                    global_step + 1,
+                )
+            should_save_periodic = (
+                args.save_checkpoint_interval > 0
+                and (global_step + 1) % args.save_checkpoint_interval == 0
+                and (not args.save_best_only or improved_loss)
+            )
+            if should_save_periodic:
+                checkpoint_path = _save_training_checkpoint(
+                    "checkpoint_step_{}.pt".format(global_step + 1),
+                    epoch,
+                    batch_idx,
+                    global_step + 1,
+                )
+                prune_old_checkpoints(
+                    checkpoint_dir,
+                    keep_last=args.keep_last_n_checkpoints,
+                )
 
             # Output training stats
             if batch_idx % args.log_interval == 0:
@@ -465,6 +622,12 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                         ),
                         log_file,
                     )
+                    checkpoint_path = _save_training_checkpoint(
+                        "early_stop_checkpoint.pt",
+                        epoch,
+                        batch_idx,
+                        global_step + 1,
+                    )
                     stopped_early = True
                     break
 
@@ -478,6 +641,19 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         utils.log_string("Training stopped early in {}".format(_format_duration(total_elapsed)), log_file)
     else:
         utils.log_string("Training finished in {}".format(_format_duration(total_elapsed)), log_file)
+    final_checkpoint_path = _save_training_checkpoint(
+        "final_checkpoint.pt",
+        last_epoch,
+        last_batch_idx,
+        next_global_step,
+    )
+    checkpoint_path = final_checkpoint_path
+    if args.export_weights_only:
+        weights_path = save_model_weights_only(
+            net.state_dict(),
+            checkpoint_dir,
+            filename="model_weights.pt",
+        )
     log_path = log_file.name
     log_file.close()
     return TrainingResult(
@@ -488,6 +664,9 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         total_elapsed_seconds=total_elapsed,
         stopped_early=stopped_early,
         stop_summary=stop_summary,
+        checkpoint_path=checkpoint_path,
+        best_checkpoint_path=best_checkpoint_path,
+        weights_path=weights_path,
     )
 
 

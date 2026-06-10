@@ -9,9 +9,16 @@ paper,  *NeurCross: A Neural Approach to Computing Cross Fields for Quad Mesh Ge
 
 ## Requirements
 
-- python 3.7
-- CUDA 11.7
-- Pytorch 1.13.1
+- Python 3.10 or newer
+- PyTorch
+- NumPy
+- SciPy
+- torchinfo
+- timm
+- trimesh
+- torch_kmeans
+
+CUDA is optional but recommended for practical training speed. The code falls back to CPU when CUDA is unavailable, but full training can be slow on CPU.
 
 ## Installation
 
@@ -55,24 +62,18 @@ To install the built wheel:
 python -m pip install .\dist\neurcross-0.1.0-py3-none-any.whl
 ```
 
-The wheel packages the Python modules and exposes a console entry point:
-
-```powershell
-neurcross-train-quad-mesh --data_path D:\path\to\mesh.ply
-```
-
-The package also exposes a high-level module entry point:
+The package exposes a high-level module entry point:
 
 ```powershell
 python -m neurcross --help
 python -m neurcross train-quad-mesh --help
-python -m neurcross crossfield-to-rosy --help
+python -m neurcross convert --help
 ```
 
-It also exposes a conversion helper for downstream QuadWild-compatible `.rosy` files:
+It also exposes conversion commands for downstream QuadWild-compatible `.rosy` files and the 3D `.rawfield` interchange format:
 
 ```powershell
-neurcross-crossfield-to-rosy D:\path\to\crossfield.txt
+python -m neurcross convert D:\path\to\crossfield.vec --format rosy
 ```
 
 ## Using NeurCross From Another Python Module
@@ -80,6 +81,9 @@ neurcross-crossfield-to-rosy D:\path\to\crossfield.txt
 The installed package exposes a small programmatic API through `neurcross`:
 
 - `neurcross.train_crossfield(...)`
+- `neurcross.load_checkpoint(...)`
+- `neurcross.load_trained_model(...)`
+- `neurcross.predict_crossfield(...)`
 - `neurcross.convert_crossfield_to_rosy(...)`
 - `neurcross.convert_crossfield_to_rawfield(...)`
 - `neurcross.convert_rawfield_to_rosy(...)`
@@ -95,20 +99,25 @@ result = neurcross.train_crossfield(
     n_samples=1000,
     n_points=1000,
     num_epochs=4,
+    save_checkpoint_interval=100,
+    export_weights_only=True,
     fast_nondeterministic=True,
 )
 
 print(result.output_dir)
 print(result.log_path)
+print(result.checkpoint_path)
+print(result.best_checkpoint_path)
+print(result.weights_path)
 print(result.total_elapsed_seconds)
 print(result.stopped_early)
 
 rosy_path = neurcross.convert_crossfield_to_rosy(
-    r"D:\path\to\output\mesh\save_crossField\mesh_final.txt"
+    r"D:\path\to\output\mesh\save_crossField\mesh_final.vec"
 )
 
 rawfield_path = neurcross.convert_crossfield_to_rawfield(
-    r"D:\path\to\output\mesh\save_crossField\mesh_final.txt"
+    r"D:\path\to\output\mesh\save_crossField\mesh_final.vec"
 )
 
 rosy_from_rawfield_path = neurcross.convert_rawfield_to_rosy(
@@ -125,6 +134,9 @@ rosy_from_rawfield_path = neurcross.convert_rawfield_to_rosy(
 - `total_elapsed_seconds`
 - `stopped_early`
 - `stop_summary`
+- `checkpoint_path`
+- `best_checkpoint_path`
+- `weights_path`
 
 If you prefer CLI-style argument forwarding from Python, `train_crossfield` also accepts `argv`:
 
@@ -139,6 +151,36 @@ result = neurcross.train_crossfield(
         "--n_points", "1000",
         "--num_epochs", "4",
     ]
+)
+```
+
+You can also resume a training run from a full checkpoint:
+
+```python
+import neurcross
+
+result = neurcross.train_crossfield(
+    data_path=r"D:\path\to\mesh.ply",
+    out_dir=r"D:\path\to\output",
+    load_checkpoint=r"D:\path\to\output\mesh\checkpoints\final_checkpoint.pt",
+    num_epochs=20,
+)
+```
+
+For inference-oriented workflows, load a trained model from a checkpoint and run predictions directly:
+
+```python
+import neurcross
+
+model, metadata = neurcross.load_trained_model(
+    r"D:\path\to\output\mesh\checkpoints\best_checkpoint.pt"
+)
+
+output_pred, theta_output = neurcross.predict_crossfield(
+    model,
+    nonmanifold_points,
+    manifold_points,
+    angle_features=angle_features,
 )
 ```
 
@@ -164,25 +206,24 @@ if __name__ == "__main__":
     main()
 ```
 
-`convert_crossfield_to_rosy(...)` reads a saved NeurCross `.txt` cross-field snapshot and writes a QuadWild-compatible `.rosy` file.
+`convert_crossfield_to_rosy(...)` reads a saved NeurCross `.vec` cross-field snapshot and writes a QuadWild-compatible `.rosy` file.
 
-`convert_crossfield_to_rawfield(...)` reads a saved NeurCross `.txt` cross-field snapshot and writes a Directional-compatible `.rawfield` file. This requires the snapshot rows to contain both cross-field branches, so each row must provide at least 6 floating-point values.
+`convert_crossfield_to_rawfield(...)` reads a saved NeurCross `.vec` cross-field snapshot and writes this package's 3D `.rawfield` interchange format. This requires the snapshot rows to contain both cross-field branches, so each row must provide at least 6 floating-point values.
 
-`convert_rawfield_to_rosy(...)` reads a Directional-compatible `.rawfield` file and writes a `.rosy` file using the first tangent direction in each rawfield row.
+`convert_rawfield_to_rosy(...)` reads this package's 3D `.rawfield` interchange format and writes a `.rosy` file using the first tangent direction in each rawfield row.
 
 The source checkout includes `data/doubleTorus/input/doubleTorus.ply`, so `--data_path` can be omitted when training from the repo. The wheel does not bundle sample training data, so `--data_path` is required after installation.
 
 ## Overfitting
 
-```
-cd quad_mesh
-python train_quad_mesh.py
+```powershell
+python -m quad_mesh.train_quad_mesh
 ```
 
 You can also override parameters from the command line:
 
 ```powershell
-python train_quad_mesh.py --data_path D:\path\to\mesh.ply --n_samples 10000 --lr 5e-5
+python -m quad_mesh.train_quad_mesh --data_path D:\path\to\mesh.ply --n_samples 10000 --lr 5e-5
 ```
 
 Equivalent installed-package usage:
@@ -199,22 +240,31 @@ The training entry point accepts the following arguments.
 
 | Argument | Default | Purpose |
 | --- | --- | --- |
-| `--out_dir` | `./output/` | Output directory used for logs and training artifacts. The script creates a subdirectory named after the input mesh file. |
+| `--out_dir` | `None` | Optional output directory used for logs and training artifacts. If omitted, outputs are written beside the input mesh. The script creates a subdirectory named after the input mesh file. |
 | `--model_name` | `model` | Model name placeholder for saved artifacts. The current training script keeps it for compatibility with the original project setup. |
 | `--seed` | `3627473` | Random seed applied to PyTorch, NumPy, and Python's `random` module for reproducible runs. |
 | `--data_path` | repo sample mesh if available, otherwise `None` | Path to the input surface mesh used for training. This must point to a mesh file supported by `trimesh`. It is required when running from an installed wheel. |
-| `--n_samples` | `10` | Number of dataset samples exposed per epoch through the dataset length. This directly affects the number of training iterations for each epoch. |
+| `--n_samples` | `10000` | Number of dataset samples exposed per epoch through the dataset length. This directly affects the number of training iterations for each epoch. |
 | `--n_points` | `15000` | Number of points sampled per training item for manifold and non-manifold point sets. Larger values increase memory and compute cost. |
 | `--grid_res` | `256` | Uniform grid resolution parameter passed into the dataset. It is part of the original training configuration, though the current dataset code does not use it directly. |
 | `--nonmnfld_sample_type` | `gaussian` | Intended strategy for off-surface sampling. Accepted values in the help text are `grid`, `gaussian`, and `combined`, but the current dataset implementation always samples uniformly in the configured range. |
-| `--num_epochs` | `1` | Number of epochs to run. The original script comment indicates this was expected to stay at `1` for the provided workflow. |
+| `--num_epochs` | `10` | Number of epochs to run. |
 | `--lr` | `5e-5` | Adam learning rate used for optimizing the model. |
 | `--grad_clip_norm` | `10.0` | Gradient clipping threshold. Set to `0` or a negative value to disable clipping. |
 | `--batch_size` | `1` | Mini-batch size used by the PyTorch `DataLoader`. Larger values require more GPU memory. |
-| `--load_path` | `None` | Optional checkpoint path. If provided, the model weights are loaded before training continues. |
+| `--load_path` | `None` | Optional weights-only path. If provided, the model weights are loaded before training starts. Do not combine with `--load_checkpoint`. |
+| `--save_checkpoint_interval` | `50` | Saves a full training checkpoint every N global training steps. Set to `0` to disable periodic checkpoints. |
+| `--save_best_only` | disabled | Saves periodic checkpoints only when the current total loss improves. The separate `best_checkpoint.pt` is still maintained when loss improves. |
+| `--checkpoint_dir` | `None` | Directory for checkpoint files. If omitted, checkpoints are written to `<out_dir>\<mesh-name>\checkpoints\`. Relative paths are resolved under the mesh output directory. |
+| `--load_checkpoint` | `None` | Full checkpoint path used to resume training, including model weights, optimizer state, metadata, loss history, early-stopper state, and random state. |
+| `--export_weights_only` | disabled | Also writes `model_weights.pt` for inference-only or external loading workflows. |
+| `--keep_last_n_checkpoints` | `3` | Number of recent periodic `checkpoint_step_*.pt` files to keep. Set to `0` to keep all periodic checkpoints. |
 | `--num_workers` | `4` | Number of `DataLoader` worker processes used for training batches. |
 | `--persistent_workers` | disabled | Keeps `DataLoader` workers alive across epochs to reduce worker startup overhead. |
 | `--fast_nondeterministic` | disabled | Allows faster nondeterministic CUDA/cuDNN behavior instead of fully deterministic seeding. |
+| `--device` | `auto` | Training device. `auto` uses CUDA when available, otherwise CPU. Use `cpu` to avoid GPU memory pressure or `cuda` to require CUDA. |
+| `--max_topology_memory_gb` | `8.0` | Preflight guard for cached mesh topology tensors. If the estimated cache exceeds this value, training stops before allocation with guidance. Set to `0` or a negative value to disable the guard. |
+| `--log_interval` | `10` | Number of batches between training log updates. |
 | `--init_type` | `siren` | Decoder initialization strategy. The help text lists `siren`, `geometric_sine`, `geometric_relu`, and `mfgi`. |
 | `--decoder_hidden_dim` | `256` | Width of the decoder hidden layers. |
 | `--decoder_n_hidden_layers` | `4` | Number of hidden layers used in the decoder network. |
@@ -234,7 +284,7 @@ The training entry point accepts the following arguments.
 | `--relax_morse` | `0.5` | Upper bound used by the relaxed Morse formulation. |
 | `--use_vertices` | `False` | Controls whether to use vertices directly instead of the default sampled points. The code comment suggests `False` is used to avoid overfitting. |
 | `--featureLine_threshold` | `1.0` | Threshold related to feature-line behavior in the cross-field pipeline. |
-| `--convert_crossfield_to_rosy` | disabled | If enabled, every saved `save_crossField/*.txt` snapshot is also converted into a QuadWild-compatible `.rosy` sidecar file. |
+| `--convert_crossfield_to_rosy` | disabled | If enabled, every saved `save_crossField/*.vec` snapshot is also converted into a QuadWild-compatible `.rosy` sidecar file. |
 | `--early_stop` | disabled | Enables early stopping based on smoothed loss plateau detection and optional theta-term thresholds. |
 | `--early_stop_min_steps` | `1000` | Minimum number of global training steps before early stopping can trigger. |
 | `--early_stop_patience` | `500` | Number of steps without sufficient smoothed-loss improvement before plateau stopping triggers. |
@@ -250,6 +300,160 @@ Notes:
 - Boolean flags defined with `action='store_true'` such as `--udf`, `--output_any`, `--morse_near`, and `--weight_for_morse` are disabled by default and become enabled when the flag is present.
 - `--use_morse_nonmnfld_grad` and `--use_vertices` use `type=bool`, so if you pass them explicitly on the command line, use forms such as `--use_vertices True` or `--use_vertices False`.
 - Some arguments are preserved from the original research code even when the current training path uses them lightly or not at all. The table above reflects the behavior of the current repository state.
+
+## GPU Memory Guards
+
+NeurCross caches padded mesh-topology tensors for theta-neighbor and cross-field metrics. These tensors scale with mesh connectivity, not with `--n_points`, so reducing point samples does not always reduce peak GPU memory.
+
+Use these controls when CUDA memory is tight:
+
+```powershell
+python -m neurcross train-quad-mesh `
+  --data_path D:\path\to\mesh.ply `
+  --device cpu
+```
+
+```powershell
+python -m neurcross train-quad-mesh `
+  --data_path D:\path\to\mesh.ply `
+  --device cuda `
+  --max_topology_memory_gb 4
+```
+
+`--device cpu` avoids CUDA OOM at the cost of runtime. `--max_topology_memory_gb` stops oversized topology allocations before they happen and prints guidance. If CUDA still runs out of memory during forward or backward computation, the training command raises a targeted error suggesting CPU fallback or mesh simplification.
+
+## Checkpoints, Resume, and Model Export
+
+Training now writes reusable PyTorch checkpoints that can be used to resume interrupted runs or load a trained model for inference. By default, checkpoint files are written under:
+
+```text
+<out_dir>\<mesh-name>\checkpoints\
+```
+
+The main files are:
+
+- `checkpoint_step_<N>.pt`: periodic full training checkpoints.
+- `best_checkpoint.pt`: the best-loss checkpoint seen so far.
+- `final_checkpoint.pt`: the final model and optimizer state at the end of the run.
+- `early_stop_checkpoint.pt`: the state saved immediately before an early-stop exit, when early stopping triggers.
+- `model_weights.pt`: weights-only export, written when `--export_weights_only` is set.
+
+Each full checkpoint includes model weights, optimizer state, training metadata, loss history, random state, and early-stopper state when early stopping is enabled.
+
+Basic checkpointed training:
+
+```powershell
+python -m neurcross train-quad-mesh `
+  --data_path D:\path\to\mesh.ply `
+  --out_dir D:\path\to\output `
+  --num_epochs 20 `
+  --save_checkpoint_interval 100 `
+  --export_weights_only
+```
+
+Resume from a full checkpoint:
+
+```powershell
+python -m neurcross train-quad-mesh `
+  --data_path D:\path\to\mesh.ply `
+  --out_dir D:\path\to\output `
+  --load_checkpoint D:\path\to\output\mesh\checkpoints\final_checkpoint.pt `
+  --num_epochs 30
+```
+
+Use `--load_path` only for loading a weights-only state dict. Use `--load_checkpoint` when you want a true training resume with optimizer and progress state restored.
+
+## Fine-Tuning From a Previous Shape
+
+Checkpoints can also seed a new shape run. There are two useful workflows:
+
+- Use `--load_checkpoint` when you want to continue a run with the saved optimizer state and training metadata.
+- Use `--load_path` with `model_weights.pt` when you want to reuse learned weights on a different mesh while starting a fresh optimizer schedule.
+
+Train a source shape and export weights:
+
+```powershell
+python -m neurcross train-quad-mesh `
+  --data_path D:\meshes\shape_a.ply `
+  --out_dir D:\runs\neurcross `
+  --num_epochs 20 `
+  --save_checkpoint_interval 100 `
+  --export_weights_only
+```
+
+Fine-tune on a target shape with a fresh optimizer:
+
+```powershell
+python -m neurcross train-quad-mesh `
+  --data_path D:\meshes\shape_b.ply `
+  --out_dir D:\runs\neurcross `
+  --load_path D:\runs\neurcross\shape_a\checkpoints\model_weights.pt `
+  --lr 1e-5 `
+  --num_epochs 10 `
+  --save_checkpoint_interval 100 `
+  --export_weights_only
+```
+
+Resume the exact source-shape run instead:
+
+```powershell
+python -m neurcross train-quad-mesh `
+  --data_path D:\meshes\shape_a.ply `
+  --out_dir D:\runs\neurcross `
+  --load_checkpoint D:\runs\neurcross\shape_a\checkpoints\final_checkpoint.pt `
+  --num_epochs 30
+```
+
+## Sharing Pretrained Checkpoints
+
+A shared checkpoint should be a small directory or archive that contains enough context for another user to load the model, understand how it was trained, and decide whether it is compatible with their run.
+
+Recommended layout:
+
+```text
+neurcross-<model-name>-<date>\
+  README.md
+  best_checkpoint.pt
+  model_weights.pt
+  metadata.json
+  sample_command.txt
+```
+
+Use these conventions:
+
+- Name packages with the project, model or dataset label, and date, for example `neurcross-doubletorus-baseline-2026-06-10`.
+- Include `best_checkpoint.pt` when sharing a resumable training artifact.
+- Include `model_weights.pt` when sharing an inference or fine-tuning artifact.
+- Include a short `README.md` that states the source mesh or dataset family, NeurCross version or commit, device used for training, approximate training steps, and any notable flags such as `--udf`, `--morse_near`, or custom architecture settings.
+- Include `metadata.json` if you want a human-readable sidecar; it is not generated automatically, but can be derived from the full checkpoint metadata.
+- Include `sample_command.txt` with the exact command used to train or fine-tune the checkpoint.
+- Do not rename architecture-critical files after export unless the README clearly documents the mapping.
+
+Compatibility expectations:
+
+- Full checkpoints are intended for `--load_checkpoint` and require compatible model architecture settings from the saved metadata.
+- Weights-only files are intended for `--load_path` and require the new run to use the same architecture settings, including `--decoder_hidden_dim`, `--decoder_n_hidden_layers`, `--nl`, `--init_type`, `--sphere_init_params`, `--udf`, and `--latent_size`.
+- A checkpoint trained on one mesh can be useful for fine-tuning another mesh, but it is not guaranteed to improve convergence or output quality for unrelated geometry.
+- Treat externally shared `.pt` files as executable PyTorch artifacts. Only load checkpoints from trusted sources.
+
+Example consumer commands:
+
+```powershell
+python -m neurcross train-quad-mesh `
+  --data_path D:\meshes\target.ply `
+  --out_dir D:\runs\neurcross `
+  --load_path D:\models\neurcross-doubletorus-baseline-2026-06-10\model_weights.pt `
+  --lr 1e-5 `
+  --num_epochs 10
+```
+
+```python
+import neurcross
+
+model, metadata = neurcross.load_trained_model(
+    r"D:\models\neurcross-doubletorus-baseline-2026-06-10\best_checkpoint.pt"
+)
+```
 
 ## Early Stopping
 
@@ -284,10 +488,10 @@ The current export manager preserves history snapshots and also maintains stable
 
 ```text
 save_crossField\
-  <mesh-name>_iter_<global_step>.txt
-  <mesh-name>_latest.txt
-  <mesh-name>_best.txt
-  <mesh-name>_final.txt
+  <mesh-name>_iter_<global_step>.vec
+  <mesh-name>_latest.vec
+  <mesh-name>_best.vec
+  <mesh-name>_final.vec
   <mesh-name>_latest.meta.txt
   <mesh-name>_best.meta.txt
   <mesh-name>_final.meta.txt
@@ -295,19 +499,19 @@ save_crossField\
 
 `latest` is overwritten every export, `best` is updated when the field-quality score improves, and `final` is written when training completes or stops early.
 
-If `--convert_crossfield_to_rosy` is enabled, these `.txt` outputs also receive QuadWild-compatible `.rosy` sidecars during training.
+If `--convert_crossfield_to_rosy` is enabled, these `.vec` outputs also receive QuadWild-compatible `.rosy` sidecars during training.
 
-The preserved `*_iter_<global_step>.txt` snapshots use the global training step, so multi-epoch runs no longer overwrite earlier exports.
+The preserved `*_iter_<global_step>.vec` snapshots use the global training step, so multi-epoch runs no longer overwrite earlier exports.
 
 You can also convert a saved cross-field file manually:
 
 ```powershell
 # convert to rosy format
-neurcross-crossfield-to-rosy D:\path\to\crossfield_iter_499.txt
+python -m neurcross convert D:\path\to\crossfield_iter_499.vec --format rosy
 # convert to rawfield format
-python -m quad_mesh.convert_crossfield D:\path\to\crossfield_iter_499.txt --format rawfield
+python -m neurcross convert D:\path\to\crossfield_iter_499.vec --format rawfield
 # convert rawfield back to rosy format
-python -m quad_mesh.convert_crossfield D:\path\to\field.rawfield --input-format rawfield --format rosy
+python -m neurcross convert D:\path\to\field.rawfield --input-format rawfield --format rosy
 ```
 
 ## Metrics Reporting
@@ -365,3 +569,182 @@ Our code is inspired by [NeurCADRecon](https://github.com/QiujieDong/NeurCADReco
 and [SIREN](https://github.com/vsitzmann/siren).
 We would like to thank the authors
 of [pyquadwild](https://github.com/dickoah/pyquadwild).
+
+
+## Call Chain
+
+The diagram below shows how a training request flows from the public API down to the core training loop.
+
+```mermaid
+flowchart LR
+    subgraph Entry["Entry Points"]
+        CLI1["python -m neurcross train-quad-mesh"]
+        CLI2["python -m neurcross train"]
+        PYAPI["neurcross.train_crossfield(...)"]
+    end
+
+    subgraph API_Layer ["API Layer"]
+        API_NEUR["neurcross/__init__.py<br/>train_crossfield()<br/>(wraps →)"]
+        API_QUAD["quad_mesh/__init__.py<br/>train_crossfield()<br/>(wraps →)"]
+    end
+
+    subgraph Core ["Core Module"]
+        CORE["quad_mesh/train_quad_mesh.py<br/>train_crossfield()"]
+    end
+
+    subgraph Helpers["Key Collaborators"]
+        ARGS["quad_mesh_args.py<br/>get_args()"]
+        DATASET["quad_mesh_dataset.py<br/>ReconDataset"]
+        MODELS["models/DiGS.py<br/>Network_predict_angle"]
+        LOSS["models/loss_quad_mesh.py<br/>MorseLoss + exports"]
+        UTILS["utils/utils.py<br/>neighbors / rotations / logging"]
+    end
+
+    CLI1 --> API_NEUR
+    CLI2 --> API_NEUR
+    PYAPI --> API_NEUR
+    API_NEUR --> API_QUAD
+    API_QUAD --> CORE
+    CORE --> ARGS
+    CORE --> DATASET
+    CORE --> MODELS
+    CORE --> LOSS
+    CORE --> UTILS
+```
+
+### Notes on the diagram
+
+- **Entry points:** `python -m neurcross train-quad-mesh`, `python -m neurcross train`, and `python -m quad_mesh.train_quad_mesh` all converge on the same core function.
+- **API wrappers:** Both `neurcross/__init__.py` and `quad_mesh/__init__.py` are thin wrappers that delegate to the real implementation in `quad_mesh/train_quad_mesh.py`.
+- **Core training:** `train_crossfield()` orchestrates dataset creation, model instantiation, the optimizer, the loss computation, checkpoint save/resume, the early-stopping controller, and periodic cross-field export.
+- **Key helpers:** `quad_mesh_args` resolves CLI arguments; `ReconDataset` provides point batches; `Network_predict_angle` is the neural network; `MorseLoss` computes the composite loss plus coordinates snapshot exports; and `utils/utils.py` handles mesh neighbor/rotation precomputation and logging.
+
+## Training Flow Diagram
+
+```mermaid
+
+flowchart TD
+    Start([Start: train_crossfield]) --> InitArgs[Initialize Arguments<br/>_build_training_args]
+    InitArgs --> ConfigWorkers[Configure DataLoader Workers<br/>_configure_programmatic_dataloader_workers]
+    ConfigWorkers --> CheckDataPath{Data Path Provided?}
+    CheckDataPath -- No --> RaiseError[Raise ValueError]
+    CheckDataPath -- Yes --> LoadDeps[Load Runtime Dependencies<br/>torch, optim, Network_predict_angle,<br/>MorseLoss, utils, dataset]
+
+    LoadDeps --> SetupOutputDir[Setup Output Directory<br/>Based on data_path and out_dir]
+    SetupOutputDir --> SetupLogging[Setup Logging<br/>utils.setup_out_dir_only_log]
+    SetupLogging --> SetupDevice[Setup Device<br/>CPU or CUDA]
+
+    SetupDevice --> SetSeed[Set Random Seed<br/>utils.same_seed]
+    SetSeed --> CreateDataset[Create ReconDataset<br/>train_set = ReconDataset]
+    CreateDataset --> GetStaticBatch[Get Static Batch<br/>static_batch = train_set.get_static_batch]
+
+    GetStaticBatch --> CreateDataLoader[Create Train DataLoader<br/>batch_size, shuffle, num_workers]
+    CreateDataLoader --> CalcSteps[Calculate Steps<br/>steps_per_epoch, total_steps]
+    CalcSteps --> LogSchedule[Log Training Schedule]
+
+    LogSchedule --> MoveToGPU_Static[Move Static Data to Device<br/>mnfld_points_base, mnfld_n_gt,<br/>local_coord_u, local_coord_v]
+    MoveToGPU_Static --> CreateAngleFeatures[Create Angle Features<br/>angle_feature_static = cat<br/>mnfld_n_gt, local_coord_u, local_coord_v]
+
+    CreateAngleFeatures --> CreateNetwork[Create Network<br/>Network_predict_angle<br/>in_dim=3, angle_in_dim=12]
+    CreateNetwork --> MoveNetToDevice[Move Network to Device]
+    MoveNetToDevice --> CheckLoadPath{Weights Path Provided?}
+    CheckLoadPath -- Yes --> LoadModel[Load Model State Dict]
+    CheckLoadPath -- No --> SkipLoad[Skip Loading]
+    LoadModel --> PrintSummary[Print Model Summary<br/>torchinfo.summary]
+    SkipLoad --> PrintSummary
+    PrintSummary --> CountParams[Count Parameters<br/>utils.count_parameters]
+
+    CountParams --> CreateOptimizer[Create Adam Optimizer<br/>lr=args.lr, weight_decay=0.0]
+    CreateOptimizer --> CheckResumeCheckpoint{Resume Checkpoint Provided?}
+    CheckResumeCheckpoint -- Yes --> LoadCheckpoint[Load Model, Optimizer,<br/>Metadata, RNG, and Resume State]
+    CheckResumeCheckpoint -- No --> SkipCheckpoint[Start Fresh]
+    LoadCheckpoint --> GetVertexNeighbors[Get Vertex Neighbors<br/>utils.get_sample_vers_neighbors_for_face_center_points_or_vertices]
+    SkipCheckpoint --> GetVertexNeighbors
+    GetVertexNeighbors --> CalcSameNeighbors[Calculate Same Neighbors<br/>utils.calculate_same_neighbors_verts]
+    CalcSameNeighbors --> GetRotationMatrix[Get Rotation Matrix<br/>utils.get_rotation_matrix]
+
+    GetRotationMatrix --> CreateLoss[Create MorseLoss Criterion<br/>weights, loss_type, div_decay,<br/>vertex_neighbors, axis_angle_R_mat_list]
+    CreateLoss --> CreateEarlyStopper{Early Stop Enabled?}
+    CreateEarlyStopper -- Yes --> InitEarlyStopper[Initialize EarlyStopper<br/>min_steps, patience, min_delta,<br/>smooth_window, check_interval,<br/>target_loss, theta thresholds]
+    CreateEarlyStopper -- No --> SkipEarlyStop[Skip Early Stopping]
+    InitEarlyStopper --> LogEarlyStop[Log Early Stop Configuration]
+    SkipEarlyStop --> LogEarlyStop
+    LogEarlyStop --> SetNetTrain[Set Network to Train Mode<br/>net.train]
+
+    SetNetTrain --> StartEpoch[FOR each epoch in range:num_epochs]
+
+    subgraph EpochLoop [Epoch Loop]
+        direction TB
+        StartEpoch --> BatchLoop[FOR each batch_idx, data in train_dataloader]
+
+        subgraph BatchLoopSub [Batch Loop]
+            direction TB
+            BatchLoop --> BatchStart[Record Batch Start Time]
+            BatchStart --> CalcGlobalStep[Calculate Global Step<br/>global_step = epoch * steps_per_epoch + batch_idx]
+            CalcGlobalStep --> CheckSaveBest{batch_idx % 500 == 0<br/>OR last batch?}
+            CheckSaveBest -- Yes --> SetSaveBest[SAVE_BEST = True]
+            CheckSaveBest -- No --> CheckFinalBatch{Is Final Batch?}
+            SetSaveBest --> CheckFinalBatch
+            CheckFinalBatch -- Yes --> SetFinalFlag[is_final_batch = True]
+            CheckFinalBatch -- No --> SetFinalFlag2[is_final_batch = False]
+            SetFinalFlag --> ZeroGrad[optimizer.zero_grad set_to_none=True]
+            SetFinalFlag2 --> ZeroGrad
+
+            ZeroGrad --> ClonePoints[Clone & Enable Gradients<br/>mnfld_points.clone, requires_grad_<br/>nonmnfld_points.requires_grad_<br/>near_points.requires_grad_]
+            ClonePoints --> ConcatFeatures[Concatenate Features<br/>features = cat mnfld_points, angle_feature_static]
+            ConcatFeatures --> ForwardPass[Forward Pass<br/>output_pred, mnfld_pts_theta_output_pred =<br/>net nonmnfld_points, mnfld_points,<br/>near_points, angle_features]
+
+            ForwardPass --> ComputeLoss[Compute Loss<br/>loss_dict = criterion<br/>output_pred, mnfld_points, nonmnfld_points,<br/>mnfld_n_gt, near_points,<br/>mnfld_pts_theta_output_pred,<br/>local_coord_u, local_coord_v,<br/>save_best, is_final_export]
+            ComputeLoss --> Backward[Backward Pass<br/>loss_dict loss backward]
+            Backward --> GradClip{Grad Clip Norm > 0?}
+            GradClip -- Yes --> ClipGradients[Clip Grad Norm<br/>torch.nn.utils.clip_grad_norm_]
+            GradClip -- No --> SkipClip[Skip Gradient Clipping]
+            ClipGradients --> ResetSaveBest[SAVE_BEST = False]
+            SkipClip --> ResetSaveBest
+
+            ResetSaveBest --> OptimizerStep[optimizer.step]
+            OptimizerStep --> SaveCheckpoint{Checkpoint Due<br/>or New Best Loss?}
+            SaveCheckpoint -- Yes --> WriteCheckpoint[Write Checkpoint]
+            SaveCheckpoint -- No --> RecordBatchTime[Record Batch Elapsed Time]
+            WriteCheckpoint --> RecordBatchTime
+            RecordBatchTime --> CheckLogInterval{batch_idx % log_interval == 0?}
+            CheckLogInterval -- Yes --> LogStats[Log Training Statistics<br/>Loss components, weights, lr,<br/>timing information]
+            CheckLogInterval -- No --> CheckEarlyStopInner
+
+            LogStats --> CheckEarlyStopInner{Early Stopper Enabled?}
+            CheckEarlyStopInner -- No --> UpdateMorseWeight
+            CheckEarlyStopInner -- Yes --> UpdateEarlyStopper[Update EarlyStopper<br/>early_stopper.update<br/>global_step, loss, theta_neighbors,<br/>theta_hessian]
+            UpdateEarlyStopper --> CheckStopTriggered{Stop Triggered?}
+            CheckStopTriggered -- Yes --> ExportSnapshot[Export Crossfield Snapshot<br/>export_crossfield_snapshot<br/>vector_alpha, vector_beta,<br/>total_loss, field_score, metrics]
+            ExportSnapshot --> WriteEarlyStopCheckpoint[Write Early Stop Checkpoint]
+            WriteEarlyStopCheckpoint --> LogEarlyStopMsg[Log Early Stop Message]
+            LogEarlyStopMsg --> SetStoppedEarly[stopped_early = True]
+            SetStoppedEarly --> BreakBatch[BREAK from Batch Loop]
+            CheckStopTriggered -- No --> UpdateMorseWeight
+
+            UpdateMorseWeight[Update Morse Weight<br/>criterion.update_morse_weight<br/>global_step, total_steps, decay_params]
+            UpdateMorseWeight --> BatchLoopEnd{Next Batch?}
+        end
+
+        BatchLoopEnd -- Yes --> BatchLoop
+        BatchLoopEnd -- No --> CheckEpochStop
+        BreakBatch --> CheckEpochStop{stopped_early?}
+    end
+
+    CheckEpochStop -- Yes --> TrainingComplete[Training Complete]
+    CheckEpochStop -- No --> StartEpoch
+
+    TrainingComplete --> CalcTotalElapsed[Calculate Total Elapsed Time]
+    CalcTotalElapsed --> LogFinal[Log Final Message<br/>Stopped early or Finished]
+    LogFinal --> WriteFinalCheckpoint[Write Final Checkpoint<br/>and Optional model_weights.pt]
+    WriteFinalCheckpoint --> CloseLogFile[Close Log File]
+    CloseLogFile --> ReturnResult[Return TrainingResult<br/>args, output_dir, log_path,<br/>mesh_name, checkpoint paths,<br/>total_elapsed_seconds, stopped_early, stop_summary]
+    ReturnResult --> End([End])
+
+    style Start fill:#90EE90
+    style End fill:#FFB6C1
+    style RaiseError fill:#FF6B6B
+    style ExportSnapshot fill:#FFE4B5
+    style ReturnResult fill:#87CEEB
+
+```

@@ -19,7 +19,7 @@ class CrossFieldExportManager:
         os.makedirs(self.metrics_dir, exist_ok=True)
 
     def _sidecar_path(self, suffix):
-        return os.path.join(self.output_dir, f'{self.filename}_{suffix}.txt')
+        return os.path.join(self.output_dir, f'{self.filename}_{suffix}.vec')
 
     def _meta_path(self, suffix):
         return os.path.join(self.output_dir, f'{self.filename}_{suffix}.meta.txt')
@@ -157,7 +157,7 @@ class MorseLoss_quad_mesh(nn.Module):
     def __init__(self, weights=None, loss_type='siren_wo_n_w_morse', div_decay='none',
                  div_type='l1', vertex_neighbors_list=None,
                  vertex_neighbors=None, axis_angle_R_mat_list=None, device=None,
-                 convert_crossfield_to_rosy=False):
+                 convert_crossfield_to_rosy=False, max_topology_memory_gb=8.0):
         super().__init__()
         if weights is None:
             weights = [7e3, 6e2, 10, 5e1, 30, 3]
@@ -168,6 +168,7 @@ class MorseLoss_quad_mesh(nn.Module):
         self.use_morse = True if 'morse' in self.loss_type else False
         self.device = device
         self.convert_crossfield_to_rosy = convert_crossfield_to_rosy
+        self.max_topology_memory_gb = float(max_topology_memory_gb)
         self._export_manager = None
 
         # Cache padded topology tensors once so theta-loss evaluation can run
@@ -182,6 +183,25 @@ class MorseLoss_quad_mesh(nn.Module):
             num_groups = len(vertex_neighbors_list)
             max_faces = max(len(group) for group in vertex_neighbors_list)
             max_neighbors = max(len(vertex_neighbors[group[0]]) for group in vertex_neighbors_list)
+            padded_entries = num_groups * max_faces * max_neighbors
+            estimated_bytes = (
+                num_groups * max_faces * 8
+                + num_groups * max_faces
+                + padded_entries * 8
+                + padded_entries
+            )
+            if axis_angle_R_mat_list is not None:
+                estimated_bytes += padded_entries * 9 * 4
+            estimated_gb = estimated_bytes / (1024 ** 3)
+            if self.max_topology_memory_gb > 0 and estimated_gb > self.max_topology_memory_gb:
+                raise MemoryError(
+                    "Estimated cached topology tensor memory is {:.2f} GiB, above "
+                    "--max_topology_memory_gb={:.2f}. Use --device cpu, simplify the mesh, "
+                    "or raise --max_topology_memory_gb if this allocation is intentional.".format(
+                        estimated_gb,
+                        self.max_topology_memory_gb,
+                    )
+                )
 
             face_indices = torch.zeros((num_groups, max_faces), dtype=torch.long, device=device)
             face_mask = torch.zeros((num_groups, max_faces), dtype=torch.bool, device=device)

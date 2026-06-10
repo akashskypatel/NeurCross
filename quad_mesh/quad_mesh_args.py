@@ -40,16 +40,62 @@ def add_args(parser):
                         help='how to sample points off the manifold - grid | gaussian | combined')
 
     # training parameters
-    parser.add_argument('--num_epochs', type=int, default=1, help='always be 1')
+    parser.add_argument('--num_epochs', type=int, default=10, help='number of training epochs')
     parser.add_argument('--lr', type=float, default=5e-5, help='initial learning rate')
     parser.add_argument('--grad_clip_norm', type=float, default=10.0, help='Value to clip gradients to')
     parser.add_argument('--batch_size', type=int, default=1, help='number of samples in a minibatch')
     parser.add_argument('--load_path', type=str, default=None)
+    parser.add_argument(
+        '--save_checkpoint_interval',
+        type=int,
+        default=50,
+        help='save checkpoint every N batches (0 to disable periodic checkpoints)',
+    )
+    parser.add_argument(
+        '--save_best_only',
+        action='store_true',
+        help='only save periodic checkpoints when loss improves',
+    )
+    parser.add_argument(
+        '--checkpoint_dir',
+        type=str,
+        default=None,
+        help='directory for checkpoints (default: output_dir/checkpoints)',
+    )
+    parser.add_argument(
+        '--load_checkpoint',
+        type=str,
+        default=None,
+        help='path to checkpoint file to resume training',
+    )
+    parser.add_argument(
+        '--export_weights_only',
+        action='store_true',
+        help='also export model_weights.pt for inference-only use',
+    )
+    parser.add_argument(
+        '--keep_last_n_checkpoints',
+        type=int,
+        default=3,
+        help='number of recent periodic checkpoints to keep (0 to keep all)',
+    )
     parser.add_argument('--num_workers', type=int, default=4, help='number of DataLoader worker processes')
     parser.add_argument('--persistent_workers', action='store_true',
                         help='keep DataLoader workers alive across epochs to reduce worker startup overhead')
     parser.add_argument('--fast_nondeterministic', action='store_true',
                         help='allow faster nondeterministic CUDA/cuDNN behavior instead of fully deterministic seeding')
+    parser.add_argument(
+        '--device',
+        choices=('auto', 'cpu', 'cuda'),
+        default='auto',
+        help='training device: auto chooses CUDA when available, otherwise CPU',
+    )
+    parser.add_argument(
+        '--max_topology_memory_gb',
+        type=float,
+        default=8.0,
+        help='maximum estimated memory for cached mesh topology tensors; set <=0 to disable the preflight guard',
+    )
     parser.add_argument('--log_interval', type=int, default=10,
                         help='number of batches between training log updates')
     parser.add_argument(

@@ -15,7 +15,7 @@ def infer_rawfield_output_path(input_path: Path) -> Path:
 
 
 def infer_crossfield_output_path(input_path: Path) -> Path:
-    return input_path.with_suffix(".crossfield.txt")
+    return input_path.with_suffix(".vec")
 
 
 def infer_output_path(input_path: Path, output_format: str) -> Path:

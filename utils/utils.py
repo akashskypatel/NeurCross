@@ -94,7 +94,7 @@ def save_only_crossField(vector_alpha, vector_beta, batch_idx=None, output_dir=N
 
     cross_field = np.concatenate((pts_vector_alpha, pts_vector_beta), axis=-1)
 
-    cross_field_save_path = os.path.join(output_dir, shapename + '_iter_{}.txt'.format(batch_idx))
+    cross_field_save_path = os.path.join(output_dir, shapename + '_iter_{}.vec'.format(batch_idx))
     np.savetxt(cross_field_save_path, cross_field)
     return cross_field_save_path
 
