@@ -305,6 +305,8 @@ def build_skipped_manifest(
     training_command: str,
     quality_gate: str,
     log_path: str | None = None,
+    sample_state: str = "skipped",
+    failure_reason: str | None = None,
 ) -> dict[str, object]:
     source_mesh_name = os.path.basename(source_mesh_path)
     source_copy_path = os.path.join(output_dir, "input", source_mesh_name)
@@ -342,7 +344,7 @@ def build_skipped_manifest(
         "quality_grade": "D",
         "quality_gate": quality_gate,
         "field_score": float("inf"),
-        "failure_reason": preflight_report.get("skip_reason") or "mesh_preflight_rejected",
+        "failure_reason": failure_reason or preflight_report.get("skip_reason") or "mesh_preflight_rejected",
     }
     acceptance_report = {
         "accepted": False,
@@ -353,7 +355,7 @@ def build_skipped_manifest(
         "warnings": list(preflight_report.get("warnings", [])),
         "preflight_status": preflight_report.get("status"),
         "repair_actions": list(preflight_report.get("repair_actions", [])),
-        "training_skipped": True,
+        "training_skipped": sample_state == "skipped",
     }
     acceptance_report_path = _write_json(
         os.path.join(output_dir, "metrics", "acceptance_report.json"),
@@ -363,7 +365,7 @@ def build_skipped_manifest(
     manifest = {
         "neurcross_dataset_schema_version": "0.1",
         "artifact_type": "neurcross_per_mesh_label",
-        "sample_state": "skipped",
+        "sample_state": sample_state,
         "sample_id": sample_id,
         "created_at_utc": created_at_utc,
         "source": {
@@ -598,5 +600,44 @@ def package_skipped_dataset_sample(
         training_command=training_command,
         quality_gate=quality_gate,
         log_path=log_path,
+    )
+    return write_manifest(manifest, output_dir)
+
+
+def package_failed_dataset_sample(
+    *,
+    output_dir: str,
+    sample_id: str,
+    source_mesh_path: str,
+    preflight_report: dict,
+    args_dict: dict,
+    device: str,
+    started_at_utc: str,
+    finished_at_utc: str,
+    elapsed_seconds: float,
+    neurcross_version: str,
+    training_command: str,
+    quality_gate: str,
+    failure_reason: str,
+    log_path: str | None = None,
+) -> str:
+    created_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    manifest = build_skipped_manifest(
+        output_dir=output_dir,
+        sample_id=sample_id,
+        source_mesh_path=source_mesh_path,
+        preflight_report=preflight_report,
+        args_dict=args_dict,
+        device=device,
+        created_at_utc=created_at_utc,
+        started_at_utc=started_at_utc,
+        finished_at_utc=finished_at_utc,
+        elapsed_seconds=elapsed_seconds,
+        neurcross_version=neurcross_version,
+        training_command=training_command,
+        quality_gate=quality_gate,
+        log_path=log_path,
+        sample_state="failed",
+        failure_reason=failure_reason,
     )
     return write_manifest(manifest, output_dir)

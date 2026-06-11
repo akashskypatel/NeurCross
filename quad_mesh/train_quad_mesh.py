@@ -1,6 +1,7 @@
 import json
 import os
 import platform
+import shutil
 import sys
 import time
 import warnings
@@ -141,6 +142,46 @@ def _resolve_output_directory(args):
     return mesh_dir, file_name, out_dir
 
 
+def _dataset_root_path(args):
+    dataset_root = getattr(args, "dataset_root", None)
+    if not dataset_root:
+        return None
+    mesh_dir = os.path.dirname(os.path.abspath(args.data_path))
+    if os.path.isabs(dataset_root):
+        return dataset_root
+    return os.path.join(mesh_dir, dataset_root)
+
+
+def _build_training_command(args, argv):
+    command_name = "generate-label" if getattr(args, "sample_id", None) else "train-quad-mesh"
+    return "python -m neurcross {} {}".format(
+        command_name,
+        " ".join(argv or []),
+    ).strip()
+
+
+def _relocate_dataset_sample(args, out_dir: str, destination: str) -> str:
+    dataset_root = _dataset_root_path(args)
+    sample_id = getattr(args, "sample_id", None)
+    if not dataset_root or not sample_id:
+        return out_dir
+    target_dir = os.path.join(dataset_root, destination, sample_id)
+    if os.path.abspath(target_dir) == os.path.abspath(out_dir):
+        return out_dir
+    os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+    if os.path.exists(target_dir):
+        shutil.rmtree(target_dir)
+    shutil.move(out_dir, target_dir)
+    return target_dir
+
+
+def _remap_path(path: str | None, old_root: str, new_root: str) -> str | None:
+    if not path:
+        return path
+    rel_path = os.path.relpath(path, old_root)
+    return os.path.join(new_root, rel_path)
+
+
 def _enforce_preflight_policy(preflight_report, policy: str):
     if preflight_report.status == "skip":
         return preflight_report
@@ -239,7 +280,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     )
     from .normalize import export_normalized_mesh
     from .preflight import inspect_mesh_path
-    from .export_dataset_sample import package_dataset_sample, package_skipped_dataset_sample
+    from .export_dataset_sample import (
+        package_dataset_sample,
+        package_failed_dataset_sample,
+        package_skipped_dataset_sample,
+    )
     from .sdf_samples import export_sdf_samples
 
     # get training parameters
@@ -287,11 +332,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
             run_finished_utc = utc_timestamp()
             elapsed_seconds = time.perf_counter() - run_start_time
-            command_name = "generate-label" if getattr(args, "sample_id", None) else "train-quad-mesh"
-            training_command = "python -m neurcross {} {}".format(
-                command_name,
-                " ".join(argv or []),
-            ).strip()
+            training_command = _build_training_command(args, argv)
             manifest_path = package_skipped_dataset_sample(
                 output_dir=out_dir,
                 sample_id=args.sample_id,
@@ -322,67 +363,102 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             manifest_path=manifest_path,
         )
 
-    if getattr(args, "normalize_mesh", True):
-        normalized_export = export_normalized_mesh(prepared_mesh, input_dir)
-        training_mesh_path = normalized_export.obj_path
-    else:
-        import numpy as np
-        from .normalize import NormalizationMetadata, NormalizedMeshExport
+    try:
+        if getattr(args, "normalize_mesh", True):
+            normalized_export = export_normalized_mesh(prepared_mesh, input_dir)
+            training_mesh_path = normalized_export.obj_path
+        else:
+            import numpy as np
+            from .normalize import NormalizationMetadata, NormalizedMeshExport
 
-        normalized_obj_path = os.path.join(input_dir, "normalized_mesh.obj")
-        normalized_ply_path = os.path.join(input_dir, "normalized_mesh.ply")
-        prepared_mesh.export(normalized_obj_path)
-        prepared_mesh.export(normalized_ply_path)
-        passthrough_metadata = NormalizationMetadata(
-            center=[0.0, 0.0, 0.0],
-            scale=1.0,
-            bounds_before_min=np.asarray(prepared_mesh.bounds[0], dtype=np.float64).astype(float).tolist(),
-            bounds_before_max=np.asarray(prepared_mesh.bounds[1], dtype=np.float64).astype(float).tolist(),
-            bounds_after_min=np.asarray(prepared_mesh.bounds[0], dtype=np.float64).astype(float).tolist(),
-            bounds_after_max=np.asarray(prepared_mesh.bounds[1], dtype=np.float64).astype(float).tolist(),
+            normalized_obj_path = os.path.join(input_dir, "normalized_mesh.obj")
+            normalized_ply_path = os.path.join(input_dir, "normalized_mesh.ply")
+            prepared_mesh.export(normalized_obj_path)
+            prepared_mesh.export(normalized_ply_path)
+            passthrough_metadata = NormalizationMetadata(
+                center=[0.0, 0.0, 0.0],
+                scale=1.0,
+                bounds_before_min=np.asarray(prepared_mesh.bounds[0], dtype=np.float64).astype(float).tolist(),
+                bounds_before_max=np.asarray(prepared_mesh.bounds[1], dtype=np.float64).astype(float).tolist(),
+                bounds_after_min=np.asarray(prepared_mesh.bounds[0], dtype=np.float64).astype(float).tolist(),
+                bounds_after_max=np.asarray(prepared_mesh.bounds[1], dtype=np.float64).astype(float).tolist(),
+            )
+            normalized_export = NormalizedMeshExport(
+                mesh=prepared_mesh.copy(),
+                obj_path=normalized_obj_path,
+                ply_path=normalized_ply_path,
+                metadata=passthrough_metadata,
+            )
+            training_mesh_path = args.data_path
+        preflight_report.artifacts = {
+            "normalized_mesh_obj": normalized_export.obj_path,
+            "normalized_mesh_ply": normalized_export.ply_path,
+        }
+        preflight_report.normalization = normalized_export.metadata.to_dict()
+        with open(mesh_report_path, "w", encoding="utf-8") as handle:
+            json.dump(preflight_report.to_dict(), handle, indent=2, sort_keys=True)
+        utils.log_string(
+            "Mesh preflight: status={} faces={} vertices={} normalized_mesh={}".format(
+                preflight_report.status,
+                preflight_report.metrics.face_count,
+                preflight_report.metrics.vertex_count,
+                normalized_export.obj_path,
+            ),
+            log_file,
         )
-        normalized_export = NormalizedMeshExport(
-            mesh=prepared_mesh.copy(),
-            obj_path=normalized_obj_path,
-            ply_path=normalized_ply_path,
-            metadata=passthrough_metadata,
+        device = _resolve_device(torch, args.device)
+        if device == 'cuda':
+            torch.cuda.set_device(0)
+            torch.cuda.init()
+        utils.log_string("Training device: {}".format(device), log_file)
+
+        # get data loaders
+        utils.same_seed(args.seed, deterministic=not args.fast_nondeterministic)
+        train_set = dataset.ReconDataset(training_mesh_path, args.n_points, args.n_samples, args.grid_res)
+        static_batch = train_set.get_static_batch()
+
+        train_dataloader = torch.utils.data.DataLoader(
+            train_set,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=args.num_workers,
+            pin_memory=(device == 'cuda'),
+            persistent_workers=(args.persistent_workers and args.num_workers > 0),
         )
-        training_mesh_path = args.data_path
-    preflight_report.artifacts = {
-        "normalized_mesh_obj": normalized_export.obj_path,
-        "normalized_mesh_ply": normalized_export.ply_path,
-    }
-    preflight_report.normalization = normalized_export.metadata.to_dict()
-    with open(mesh_report_path, "w", encoding="utf-8") as handle:
-        json.dump(preflight_report.to_dict(), handle, indent=2, sort_keys=True)
-    utils.log_string(
-        "Mesh preflight: status={} faces={} vertices={} normalized_mesh={}".format(
-            preflight_report.status,
-            preflight_report.metrics.face_count,
-            preflight_report.metrics.vertex_count,
-            normalized_export.obj_path,
-        ),
-        log_file,
-    )
-    device = _resolve_device(torch, args.device)
-    if device == 'cuda':
-        torch.cuda.set_device(0)
-        torch.cuda.init()
-    utils.log_string("Training device: {}".format(device), log_file)
+    except Exception as exc:
+        if getattr(args, "dataset_root", None):
+            from neurcross import __version__ as neurcross_version
 
-    # get data loaders
-    utils.same_seed(args.seed, deterministic=not args.fast_nondeterministic)
-    train_set = dataset.ReconDataset(training_mesh_path, args.n_points, args.n_samples, args.grid_res)
-    static_batch = train_set.get_static_batch()
-
-    train_dataloader = torch.utils.data.DataLoader(
-        train_set,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=(device == 'cuda'),
-        persistent_workers=(args.persistent_workers and args.num_workers > 0),
-    )
+            failure_message = "{}: {}".format(type(exc).__name__, exc)
+            utils.log_string("Dataset-label setup failed: {}".format(failure_message), log_file)
+            log_path = log_file.name
+            log_file.close()
+            run_finished_utc = utc_timestamp()
+            elapsed_seconds = time.perf_counter() - run_start_time
+            training_command = _build_training_command(args, argv)
+            manifest_path = package_failed_dataset_sample(
+                output_dir=out_dir,
+                sample_id=args.sample_id,
+                source_mesh_path=args.data_path,
+                preflight_report=preflight_report.to_dict(),
+                args_dict=dict(vars(args)),
+                device=args.device,
+                started_at_utc=run_started_utc,
+                finished_at_utc=run_finished_utc,
+                elapsed_seconds=elapsed_seconds,
+                neurcross_version=neurcross_version,
+                training_command=training_command,
+                quality_gate=getattr(args, "quality_gate", "default"),
+                failure_reason=failure_message,
+                log_path=log_path,
+            )
+            failed_out_dir = _relocate_dataset_sample(args, out_dir, "failed")
+            relocated_manifest = _remap_path(manifest_path, out_dir, failed_out_dir)
+            raise RuntimeError(
+                "Dataset-label setup failed; artifacts captured under {}".format(failed_out_dir)
+            ) from exc
+        log_file.close()
+        raise
     steps_per_epoch = len(train_dataloader)
     total_steps = steps_per_epoch * args.num_epochs
     utils.log_string(
@@ -803,11 +879,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     if getattr(args, "dataset_root", None):
         from neurcross import __version__ as neurcross_version
 
-        command_name = "generate-label" if getattr(args, "sample_id", None) else "train-quad-mesh"
-        training_command = "python -m neurcross {} {}".format(
-            command_name,
-            " ".join(argv or []),
-        ).strip()
+        training_command = _build_training_command(args, argv)
         runtime_info = {
             "git_commit": None,
             "python_version": sys.version.split()[0],
@@ -838,6 +910,16 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             export_geometry_npz=getattr(args, "export_geometry_npz", True),
             quality_gate=getattr(args, "quality_gate", "default"),
         )
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        if not manifest["quality"]["accepted"]:
+            quarantine_out_dir = _relocate_dataset_sample(args, out_dir, "quarantine")
+            log_path = _remap_path(log_path, out_dir, quarantine_out_dir)
+            checkpoint_path = _remap_path(checkpoint_path, out_dir, quarantine_out_dir)
+            best_checkpoint_path = _remap_path(best_checkpoint_path, out_dir, quarantine_out_dir)
+            weights_path = _remap_path(weights_path, out_dir, quarantine_out_dir)
+            manifest_path = _remap_path(manifest_path, out_dir, quarantine_out_dir)
+            out_dir = quarantine_out_dir
     return TrainingResult(
         args=args,
         output_dir=out_dir,

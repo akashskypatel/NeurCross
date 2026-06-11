@@ -98,3 +98,43 @@ def test_generate_label_strict_preflight_writes_skipped_manifest(tmp_path):
     assert manifest["outputs"]["crossfield_best_vec"] is None
     assert manifest["quality"]["accepted"] is False
     assert manifest["quality"]["failure_reason"]
+
+
+def test_generate_label_setup_failure_captures_failed_artifacts(tmp_path, monkeypatch):
+    from quad_mesh.generate_label import main as generate_label_main
+    import quad_mesh.normalize as normalize_mod
+
+    mesh = trimesh.creation.box()
+    mesh_path = tmp_path / "box.obj"
+    mesh.export(mesh_path)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("forced-normalize-failure")
+
+    monkeypatch.setattr(normalize_mod, "export_normalized_mesh", _boom)
+
+    dataset_root = tmp_path / "dataset"
+    try:
+        generate_label_main(
+            [
+                "--data_path",
+                str(mesh_path),
+                "--dataset_root",
+                str(dataset_root),
+                "--sample_id",
+                "failed-sample",
+                "--overwrite",
+                "--device",
+                "cpu",
+            ]
+        )
+    except RuntimeError as exc:
+        assert "artifacts captured under" in str(exc)
+    else:
+        raise AssertionError("generate-label should raise on setup failure")
+
+    manifest_path = dataset_root / "failed" / "failed-sample" / "manifest.json"
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["sample_state"] == "failed"
+    assert manifest["quality"]["accepted"] is False

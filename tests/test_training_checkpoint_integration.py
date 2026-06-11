@@ -266,3 +266,60 @@ def test_generate_label_writes_manifest(tmp_path):
     assert "tsdf_values" in sdf.files
     assert "sample_type" in sdf.files
     assert "sign_reliability" in sdf.files
+
+
+def test_generate_label_quarantines_low_quality(tmp_path, monkeypatch):
+    _require_cuda_torch()
+    import json
+    from quad_mesh.generate_label import main as generate_label_main
+    import quad_mesh.export_dataset_sample as export_mod
+
+    mesh_path = _cube_mesh_path()
+    if not os.path.exists(mesh_path):
+        pytest.skip("sample cube mesh is not available")
+
+    def _force_quarantine(best_metrics, *, gate_name="default"):
+        return {
+            "accepted": False,
+            "quality_grade": "C",
+            "quality_gate": gate_name,
+            "field_score": 99.0,
+            "failure_reason": None,
+        }
+
+    monkeypatch.setattr(export_mod, "_quality_from_metrics", _force_quarantine)
+
+    dataset_root = tmp_path / "dataset"
+    generate_label_main(
+        [
+            "--data_path",
+            mesh_path,
+            "--dataset_root",
+            str(dataset_root),
+            "--sample_id",
+            "cube-quarantine",
+            "--overwrite",
+            "--device",
+            "cuda",
+            "--num_epochs",
+            "1",
+            "--n_samples",
+            "1",
+            "--n_points",
+            "16",
+            "--batch_size",
+            "1",
+            "--num_workers",
+            "0",
+            "--log_interval",
+            "1",
+            "--save_checkpoint_interval",
+            "1",
+            "--fast_nondeterministic",
+        ]
+    )
+
+    manifest_path = dataset_root / "quarantine" / "cube-quarantine" / "manifest.json"
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["quality"]["accepted"] is False
