@@ -293,3 +293,76 @@ def test_validate_manifest_allows_missing_optional_geometry_path(tmp_path):
     }
 
     validate_manifest(manifest, str(tmp_path))
+
+
+def test_validate_manifest_accepts_skipped_sample(tmp_path):
+    from quad_mesh.export_dataset_sample import validate_manifest
+    import hashlib
+
+    (tmp_path / "input").mkdir()
+    (tmp_path / "metrics").mkdir()
+    (tmp_path / "logs").mkdir()
+
+    source_mesh = tmp_path / "input" / "original_mesh.obj"
+    acceptance_report = tmp_path / "metrics" / "acceptance_report.json"
+    command_path = tmp_path / "logs" / "command.txt"
+
+    source_mesh.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+    acceptance_report.write_text("{}", encoding="utf-8")
+    command_path.write_text("cmd\n", encoding="utf-8")
+
+    def sha(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    manifest = {
+        "neurcross_dataset_schema_version": "0.1",
+        "artifact_type": "neurcross_per_mesh_label",
+        "sample_state": "skipped",
+        "sample_id": "sample-001",
+        "created_at_utc": "2026-06-11T00:00:00Z",
+        "source": {
+            "source_mesh_path": "input/original_mesh.obj",
+            "source_mesh_sha256": sha(source_mesh),
+            "source_format": "obj",
+        },
+        "mesh": {
+            "normalized_mesh_path": None,
+            "normalized_mesh_sha256": None,
+            "vertex_count": 0,
+            "face_count": 0,
+            "is_watertight": False,
+        },
+        "normalization": {
+            "coordinate_space": "source",
+            "target_bounds": None,
+            "center": [0.0, 0.0, 0.0],
+            "scale": 1.0,
+        },
+        "training": {
+            "tool": "neurcross",
+            "neurcross_version": "0.1.0",
+            "command": "python -m neurcross generate-label",
+            "args": {},
+            "seed": 1,
+            "device": "cpu",
+            "started_at_utc": "2026-06-11T00:00:00Z",
+            "finished_at_utc": "2026-06-11T00:00:01Z",
+            "elapsed_seconds": 1.0,
+        },
+        "outputs": {
+            "selected_label": "none",
+            "crossfield_best_vec": None,
+            "metrics_best_json": None,
+            "command_path": "logs/command.txt",
+        },
+        "quality": {
+            "accepted": False,
+            "quality_grade": "D",
+            "quality_gate": "strict",
+            "field_score": float("inf"),
+            "failure_reason": "mesh_preflight_rejected",
+            "acceptance_report_json": "metrics/acceptance_report.json",
+        },
+    }
+
+    validate_manifest(manifest, str(tmp_path))

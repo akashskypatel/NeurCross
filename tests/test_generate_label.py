@@ -1,4 +1,7 @@
 import os
+import json
+
+import trimesh
 
 
 def test_derive_sample_id_is_deterministic(tmp_path):
@@ -55,3 +58,43 @@ def test_cli_help_lists_generate_label():
     help_text = parser.format_help()
 
     assert "generate-label" in help_text
+
+
+def test_generate_label_strict_preflight_writes_skipped_manifest(tmp_path):
+    from quad_mesh.generate_label import main as generate_label_main
+
+    left = trimesh.creation.box()
+    right = trimesh.creation.box()
+    right.apply_translation((3.0, 0.0, 0.0))
+    mesh = trimesh.util.concatenate((left, right))
+    mesh_path = tmp_path / "two_boxes.obj"
+    mesh.export(mesh_path)
+
+    dataset_root = tmp_path / "dataset"
+    generate_label_main(
+        [
+            "--data_path",
+            str(mesh_path),
+            "--dataset_root",
+            str(dataset_root),
+            "--sample_id",
+            "skip-sample",
+            "--overwrite",
+            "--preflight_policy",
+            "strict",
+            "--device",
+            "cpu",
+        ]
+    )
+
+    manifest_path = dataset_root / "skip-sample" / "manifest.json"
+    report_path = dataset_root / "skip-sample" / "mesh_quality_report.json"
+    assert manifest_path.exists()
+    assert report_path.exists()
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["sample_state"] == "skipped"
+    assert manifest["outputs"]["selected_label"] == "none"
+    assert manifest["outputs"]["crossfield_best_vec"] is None
+    assert manifest["quality"]["accepted"] is False
+    assert manifest["quality"]["failure_reason"]

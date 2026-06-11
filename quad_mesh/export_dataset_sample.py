@@ -75,6 +75,14 @@ def _copy_required(source_path: str, destination_path: str) -> str:
     return destination_path
 
 
+def _write_json(path: str, payload: dict[str, object]) -> str:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    return path
+
+
 def _rel(root: str, path: str | None) -> str | None:
     if path is None:
         return None
@@ -208,6 +216,7 @@ def build_manifest(
     manifest = {
         "neurcross_dataset_schema_version": "0.1",
         "artifact_type": "neurcross_per_mesh_label",
+        "sample_state": "completed",
         "sample_id": sample_id,
         "created_at_utc": created_at_utc,
         "source": {
@@ -280,6 +289,153 @@ def build_manifest(
     return manifest
 
 
+def build_skipped_manifest(
+    *,
+    output_dir: str,
+    sample_id: str,
+    source_mesh_path: str,
+    preflight_report: dict,
+    args_dict: dict,
+    device: str,
+    created_at_utc: str,
+    started_at_utc: str,
+    finished_at_utc: str,
+    elapsed_seconds: float,
+    neurcross_version: str,
+    training_command: str,
+    quality_gate: str,
+    log_path: str | None = None,
+) -> dict[str, object]:
+    source_mesh_name = os.path.basename(source_mesh_path)
+    source_copy_path = os.path.join(output_dir, "input", source_mesh_name)
+    original_mesh_path = _copy_required(source_mesh_path, source_copy_path)
+    command_txt_path = os.path.join(output_dir, "logs", "command.txt")
+    os.makedirs(os.path.dirname(command_txt_path), exist_ok=True)
+    with open(command_txt_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(training_command)
+        handle.write("\n")
+
+    log_copy_path = None
+    if log_path and os.path.exists(log_path):
+        log_copy_path = _copy_required(log_path, os.path.join(output_dir, "logs", "train.log"))
+
+    normalized_mesh_path = None
+    normalized_mesh_sha256 = None
+    normalization = preflight_report.get("normalization") or {
+        "center": [0.0, 0.0, 0.0],
+        "scale": 1.0,
+        "bounds_before_min": [],
+        "bounds_before_max": [],
+        "bounds_after_min": [],
+        "bounds_after_max": [],
+    }
+    normalized_ply_source = (preflight_report.get("artifacts") or {}).get("normalized_mesh_ply")
+    if normalized_ply_source and os.path.exists(normalized_ply_source):
+        normalized_mesh_path = _copy_required(
+            normalized_ply_source,
+            os.path.join(output_dir, "input", "normalized_mesh.ply"),
+        )
+        normalized_mesh_sha256 = _sha256_file(normalized_mesh_path)
+
+    quality = {
+        "accepted": False,
+        "quality_grade": "D",
+        "quality_gate": quality_gate,
+        "field_score": float("inf"),
+        "failure_reason": preflight_report.get("skip_reason") or "mesh_preflight_rejected",
+    }
+    acceptance_report = {
+        "accepted": False,
+        "quality_grade": "D",
+        "quality_gate": quality_gate,
+        "field_score": None,
+        "failure_reason": quality["failure_reason"],
+        "warnings": list(preflight_report.get("warnings", [])),
+        "preflight_status": preflight_report.get("status"),
+        "repair_actions": list(preflight_report.get("repair_actions", [])),
+        "training_skipped": True,
+    }
+    acceptance_report_path = _write_json(
+        os.path.join(output_dir, "metrics", "acceptance_report.json"),
+        acceptance_report,
+    )
+
+    manifest = {
+        "neurcross_dataset_schema_version": "0.1",
+        "artifact_type": "neurcross_per_mesh_label",
+        "sample_state": "skipped",
+        "sample_id": sample_id,
+        "created_at_utc": created_at_utc,
+        "source": {
+            "source_mesh_path": _rel(output_dir, original_mesh_path),
+            "source_mesh_sha256": _sha256_file(original_mesh_path),
+            "source_format": os.path.splitext(source_mesh_name)[1].lstrip(".").lower(),
+            "source_dataset": None,
+            "source_url": None,
+            "license": None,
+            "author": None,
+            "original_filename": source_mesh_name,
+        },
+        "mesh": {
+            "normalized_mesh_path": _rel(output_dir, normalized_mesh_path),
+            "normalized_mesh_sha256": normalized_mesh_sha256,
+            "vertex_count": int(preflight_report.get("metrics", {}).get("vertex_count", 0)),
+            "face_count": int(preflight_report.get("metrics", {}).get("face_count", 0)),
+            "is_watertight": bool(preflight_report.get("metrics", {}).get("watertight", False)),
+            "connected_component_count": int(preflight_report.get("metrics", {}).get("connected_components", 0)),
+            "nonmanifold_edge_count": int(preflight_report.get("metrics", {}).get("nonmanifold_edges", 0)),
+            "boundary_edge_count": int(preflight_report.get("metrics", {}).get("boundary_edges", 0)),
+            "repair_actions": list(preflight_report.get("repair_actions", [])),
+        },
+        "normalization": {
+            "coordinate_space": "normalized" if normalized_mesh_path else "source",
+            "target_bounds": "[-0.5, 0.5]^3" if normalized_mesh_path else None,
+            "center": normalization.get("center", [0.0, 0.0, 0.0]),
+            "scale": normalization.get("scale", 1.0),
+            "original_bounds_min": normalization.get("bounds_before_min"),
+            "original_bounds_max": normalization.get("bounds_before_max"),
+            "normalized_bounds_min": normalization.get("bounds_after_min"),
+            "normalized_bounds_max": normalization.get("bounds_after_max"),
+        },
+        "training": {
+            "tool": "neurcross",
+            "neurcross_version": neurcross_version,
+            "command": training_command,
+            "args": args_dict,
+            "seed": args_dict["seed"],
+            "device": device,
+            "started_at_utc": started_at_utc,
+            "finished_at_utc": finished_at_utc,
+            "elapsed_seconds": float(elapsed_seconds),
+            "git_commit": None,
+            "python_version": None,
+            "torch_version": None,
+            "cuda_version": None,
+            "platform": None,
+            "stopped_early": False,
+            "stop_summary": None,
+        },
+        "outputs": {
+            "selected_label": "none",
+            "crossfield_best_vec": None,
+            "metrics_best_json": None,
+            "crossfield_final_vec": None,
+            "metrics_final_json": None,
+            "geometry_npz": None,
+            "sdf_samples_npz": None,
+            "log_path": _rel(output_dir, log_copy_path),
+            "command_path": _rel(output_dir, command_txt_path),
+        },
+        "quality": {
+            **quality,
+            "warnings": list(preflight_report.get("warnings", [])),
+            "validation_metrics_json": None,
+            "acceptance_report_json": _rel(output_dir, acceptance_report_path),
+        },
+    }
+    return manifest
+
+
 def validate_manifest(manifest: dict, output_dir: str) -> None:
     required_top_level = (
         "neurcross_dataset_schema_version",
@@ -301,10 +457,10 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
 
     required_section_fields = {
         "source": ("source_mesh_path", "source_mesh_sha256", "source_format"),
-        "mesh": ("normalized_mesh_path", "normalized_mesh_sha256", "vertex_count", "face_count", "is_watertight"),
+        "mesh": ("vertex_count", "face_count", "is_watertight"),
         "normalization": ("coordinate_space", "target_bounds", "center", "scale"),
         "training": ("tool", "neurcross_version", "command", "args", "seed", "device", "started_at_utc", "finished_at_utc", "elapsed_seconds"),
-        "outputs": ("selected_label", "crossfield_best_vec", "metrics_best_json"),
+        "outputs": ("selected_label",),
         "quality": ("accepted", "quality_grade", "quality_gate", "field_score", "failure_reason"),
     }
     for section_name, fields in required_section_fields.items():
@@ -314,6 +470,8 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
         for field in fields:
             if field not in section:
                 raise ValueError(f"manifest section '{section_name}' missing field: {field}")
+
+    sample_state = manifest.get("sample_state", "completed")
 
     path_fields = (
         ("source", "source_mesh_path"),
@@ -335,15 +493,16 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
     source_path = os.path.join(output_dir, manifest["source"]["source_mesh_path"])
     if _sha256_file(source_path) != manifest["source"]["source_mesh_sha256"]:
         raise ValueError("source mesh sha256 does not match manifest")
-    normalized_path = os.path.join(output_dir, manifest["mesh"]["normalized_mesh_path"])
-    if _sha256_file(normalized_path) != manifest["mesh"]["normalized_mesh_sha256"]:
-        raise ValueError("normalized mesh sha256 does not match manifest")
-    expected_rows = int(manifest["mesh"]["face_count"])
-    actual_rows = _count_crossfield_rows(os.path.join(output_dir, manifest["outputs"]["crossfield_best_vec"]))
-    if actual_rows != expected_rows:
-        raise ValueError(
-            f"cross-field row count mismatch: expected {expected_rows} rows from face_count, got {actual_rows}"
-        )
+    if sample_state == "completed":
+        normalized_path = os.path.join(output_dir, manifest["mesh"]["normalized_mesh_path"])
+        if _sha256_file(normalized_path) != manifest["mesh"]["normalized_mesh_sha256"]:
+            raise ValueError("normalized mesh sha256 does not match manifest")
+        expected_rows = int(manifest["mesh"]["face_count"])
+        actual_rows = _count_crossfield_rows(os.path.join(output_dir, manifest["outputs"]["crossfield_best_vec"]))
+        if actual_rows != expected_rows:
+            raise ValueError(
+                f"cross-field row count mismatch: expected {expected_rows} rows from face_count, got {actual_rows}"
+            )
 
 
 def write_manifest(manifest: dict, output_dir: str) -> str:
@@ -403,5 +562,41 @@ def package_dataset_sample(
         sdf_samples_path=sdf_samples_path,
         export_geometry_npz=export_geometry_npz,
         quality_gate=quality_gate,
+    )
+    return write_manifest(manifest, output_dir)
+
+
+def package_skipped_dataset_sample(
+    *,
+    output_dir: str,
+    sample_id: str,
+    source_mesh_path: str,
+    preflight_report: dict,
+    args_dict: dict,
+    device: str,
+    started_at_utc: str,
+    finished_at_utc: str,
+    elapsed_seconds: float,
+    neurcross_version: str,
+    training_command: str,
+    quality_gate: str,
+    log_path: str | None = None,
+) -> str:
+    created_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    manifest = build_skipped_manifest(
+        output_dir=output_dir,
+        sample_id=sample_id,
+        source_mesh_path=source_mesh_path,
+        preflight_report=preflight_report,
+        args_dict=args_dict,
+        device=device,
+        created_at_utc=created_at_utc,
+        started_at_utc=started_at_utc,
+        finished_at_utc=finished_at_utc,
+        elapsed_seconds=elapsed_seconds,
+        neurcross_version=neurcross_version,
+        training_command=training_command,
+        quality_gate=quality_gate,
+        log_path=log_path,
     )
     return write_manifest(manifest, output_dir)

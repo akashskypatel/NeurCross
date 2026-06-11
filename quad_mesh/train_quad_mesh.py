@@ -239,7 +239,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     )
     from .normalize import export_normalized_mesh
     from .preflight import inspect_mesh_path
-    from .export_dataset_sample import package_dataset_sample
+    from .export_dataset_sample import package_dataset_sample, package_skipped_dataset_sample
     from .sdf_samples import export_sdf_samples
 
     # get training parameters
@@ -262,6 +262,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
     mesh_dir, file_name, out_dir = _resolve_output_directory(args)
     run_started_utc = utc_timestamp()
+    manifest_path = None
     if args.checkpoint_dir is None:
         checkpoint_dir = os.path.join(out_dir, "checkpoints")
     elif os.path.isabs(args.checkpoint_dir):
@@ -281,12 +282,44 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     if prepared_mesh is None or preflight_report.status == "skip":
         with open(mesh_report_path, "w", encoding="utf-8") as handle:
             json.dump(preflight_report.to_dict(), handle, indent=2, sort_keys=True)
-        log_file.close()
-        raise ValueError(
-            "Mesh preflight rejected '{}': {}".format(
-                args.data_path,
-                preflight_report.skip_reason or "input mesh is not trainable",
+        if getattr(args, "dataset_root", None):
+            from neurcross import __version__ as neurcross_version
+
+            run_finished_utc = utc_timestamp()
+            elapsed_seconds = time.perf_counter() - run_start_time
+            command_name = "generate-label" if getattr(args, "sample_id", None) else "train-quad-mesh"
+            training_command = "python -m neurcross {} {}".format(
+                command_name,
+                " ".join(argv or []),
+            ).strip()
+            manifest_path = package_skipped_dataset_sample(
+                output_dir=out_dir,
+                sample_id=args.sample_id,
+                source_mesh_path=args.data_path,
+                preflight_report=preflight_report.to_dict(),
+                args_dict=dict(vars(args)),
+                device=args.device,
+                started_at_utc=run_started_utc,
+                finished_at_utc=run_finished_utc,
+                elapsed_seconds=elapsed_seconds,
+                neurcross_version=neurcross_version,
+                training_command=training_command,
+                quality_gate=getattr(args, "quality_gate", "default"),
+                log_path=log_file.name,
             )
+        log_file.close()
+        return TrainingResult(
+            args=args,
+            output_dir=out_dir,
+            log_path=log_file.name,
+            mesh_name=file_name,
+            total_elapsed_seconds=time.perf_counter() - run_start_time,
+            stopped_early=False,
+            stop_summary={
+                "reason": "preflight_skip",
+                "message": preflight_report.skip_reason or "input mesh is not trainable",
+            },
+            manifest_path=manifest_path,
         )
 
     if getattr(args, "normalize_mesh", True):
