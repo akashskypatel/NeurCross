@@ -109,6 +109,7 @@ def resolve_input_meshes(data_path: str) -> tuple[list[str], str | None]:
 
 def _find_manifest_path(dataset_root: str, sample_id: str) -> str | None:
     candidates = (
+        os.path.join(dataset_root, "accepted", sample_id, "manifest.json"),
         os.path.join(dataset_root, sample_id, "manifest.json"),
         os.path.join(dataset_root, "quarantine", sample_id, "manifest.json"),
         os.path.join(dataset_root, "failed", sample_id, "manifest.json"),

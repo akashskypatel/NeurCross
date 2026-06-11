@@ -1203,7 +1203,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             )
             with open(manifest_path, "r", encoding="utf-8") as handle:
                 manifest = json.load(handle)
-            if not manifest["quality"]["accepted"]:
+            recommended_destination = manifest["quality"].get("recommended_destination")
+            if recommended_destination == "quarantine":
                 quarantine_out_dir = _relocate_dataset_sample(args, out_dir, "quarantine")
                 log_path = _remap_path(log_path, out_dir, quarantine_out_dir)
                 checkpoint_path = _remap_path(checkpoint_path, out_dir, quarantine_out_dir)
@@ -1211,6 +1212,14 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 weights_path = _remap_path(weights_path, out_dir, quarantine_out_dir)
                 manifest_path = _remap_path(manifest_path, out_dir, quarantine_out_dir)
                 out_dir = quarantine_out_dir
+            elif recommended_destination == "accepted":
+                accepted_out_dir = _relocate_dataset_sample(args, out_dir, "accepted")
+                log_path = _remap_path(log_path, out_dir, accepted_out_dir)
+                checkpoint_path = _remap_path(checkpoint_path, out_dir, accepted_out_dir)
+                best_checkpoint_path = _remap_path(best_checkpoint_path, out_dir, accepted_out_dir)
+                weights_path = _remap_path(weights_path, out_dir, accepted_out_dir)
+                manifest_path = _remap_path(manifest_path, out_dir, accepted_out_dir)
+                out_dir = accepted_out_dir
     except Exception as exc:
         if getattr(args, "dataset_root", None):
             failure_message = "training_finalize_failed: {}: {}".format(type(exc).__name__, exc)

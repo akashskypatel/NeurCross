@@ -240,7 +240,8 @@ def test_generate_label_writes_manifest(tmp_path):
         ]
     )
 
-    manifest_path = dataset_root / "cube-sample" / "manifest.json"
+    sample_dir = dataset_root / "accepted" / "cube-sample"
+    manifest_path = sample_dir / "manifest.json"
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["neurcross_dataset_schema_version"] == "0.1"
@@ -258,37 +259,38 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["quality"]["validation_metrics_json"] == "metrics/validation_metrics.json"
     assert manifest["quality"]["validation_history_json"] == "metrics/validation_history.json"
     assert manifest["quality"]["quality_gate"] == "default"
+    assert manifest["quality"]["recommended_destination"] == "accepted"
     assert manifest["training"]["python_version"]
     assert manifest["training"]["torch_version"]
     assert manifest["training"]["cuda_version"]
     assert manifest["training"]["platform"]
     assert manifest["training"]["args"]["save_best_by"] == "val_field_score"
-    assert not (dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz").exists()
-    assert (dataset_root / "cube-sample" / "sdf" / "sdf_samples.npz").exists()
-    assert (dataset_root / "cube-sample" / "metrics" / "validation_samples.npz").exists()
-    assert (dataset_root / "cube-sample" / "logs" / "command.txt").exists()
-    assert (dataset_root / "cube-sample" / "metrics" / "acceptance_report.json").exists()
-    assert (dataset_root / "cube-sample" / "metrics" / "validation_metrics.json").exists()
-    assert (dataset_root / "cube-sample" / "metrics" / "validation_history.json").exists()
-    sdf = np.load(dataset_root / "cube-sample" / "sdf" / "sdf_samples.npz")
+    assert not (sample_dir / "geometry" / "mesh_geometry.npz").exists()
+    assert (sample_dir / "sdf" / "sdf_samples.npz").exists()
+    assert (sample_dir / "metrics" / "validation_samples.npz").exists()
+    assert (sample_dir / "logs" / "command.txt").exists()
+    assert (sample_dir / "metrics" / "acceptance_report.json").exists()
+    assert (sample_dir / "metrics" / "validation_metrics.json").exists()
+    assert (sample_dir / "metrics" / "validation_history.json").exists()
+    sdf = np.load(sample_dir / "sdf" / "sdf_samples.npz")
     assert "query_points" in sdf.files
     assert "sdf_values" in sdf.files
     assert "tsdf_values" in sdf.files
     assert "sample_type" in sdf.files
     assert "sign_reliability" in sdf.files
-    validation = np.load(dataset_root / "cube-sample" / "metrics" / "validation_samples.npz")
+    validation = np.load(sample_dir / "metrics" / "validation_samples.npz")
     assert "nonmnfld_points" in validation.files
     assert "near_points" in validation.files
     assert "nonmnfld_sample_labels" in validation.files
     assert "validation_face_indices" in validation.files
     validation_metrics = json.loads(
-        (dataset_root / "cube-sample" / "metrics" / "validation_metrics.json").read_text(encoding="utf-8")
+        (sample_dir / "metrics" / "validation_metrics.json").read_text(encoding="utf-8")
     )
     assert "score" in validation_metrics
     assert "field_validity" in validation_metrics
     assert validation_metrics["evaluation"]["kind"] == "fixed_validation_batch"
     validation_history = json.loads(
-        (dataset_root / "cube-sample" / "metrics" / "validation_history.json").read_text(encoding="utf-8")
+        (sample_dir / "metrics" / "validation_history.json").read_text(encoding="utf-8")
     )
     assert len(validation_history) >= 2
     assert all("score" in item for item in validation_history)
@@ -311,9 +313,12 @@ def test_generate_label_quarantines_low_quality(tmp_path, monkeypatch):
             "quality_gate": gate_name,
             "field_score": 99.0,
             "failure_reason": None,
+            "failed_checks": [],
+            "warning_checks": ["forced_quarantine_for_test"],
+            "recommended_destination": "quarantine",
         }
 
-    monkeypatch.setattr(export_mod, "_quality_from_metrics", _force_quarantine)
+    monkeypatch.setattr(export_mod, "evaluate_quality_gate", _force_quarantine)
 
     dataset_root = tmp_path / "dataset"
     generate_label_main(
@@ -349,6 +354,7 @@ def test_generate_label_quarantines_low_quality(tmp_path, monkeypatch):
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["quality"]["accepted"] is False
+    assert manifest["quality"]["recommended_destination"] == "quarantine"
 
 
 def test_generate_label_captures_training_step_failure(tmp_path, monkeypatch):
@@ -466,7 +472,7 @@ def test_generate_label_val_field_score_can_select_final_label(tmp_path, monkeyp
         ]
     )
 
-    sample_dir = dataset_root / "cube-final-selected"
+    sample_dir = dataset_root / "accepted" / "cube-final-selected"
     manifest = json.loads((sample_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["outputs"]["selected_label"] == "final"
 
@@ -540,7 +546,7 @@ def test_generate_label_train_field_score_preserves_best_label(tmp_path, monkeyp
         ]
     )
 
-    sample_dir = dataset_root / "cube-train-selected"
+    sample_dir = dataset_root / "accepted" / "cube-train-selected"
     manifest = json.loads((sample_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["outputs"]["selected_label"] == "best"
 
