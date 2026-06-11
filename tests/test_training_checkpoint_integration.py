@@ -224,6 +224,13 @@ def test_generate_label_writes_manifest(tmp_path):
             "1",
             "--save_checkpoint_interval",
             "1",
+            "--export_sdf_samples",
+            "--sdf_n_surface",
+            "8",
+            "--sdf_n_near",
+            "8",
+            "--sdf_n_uniform",
+            "16",
             "--fast_nondeterministic",
         ]
     )
@@ -235,16 +242,18 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["artifact_type"] == "neurcross_per_mesh_label"
     assert manifest["sample_id"] == "cube-sample"
     assert manifest["outputs"]["crossfield_best_vec"] == "fields/crossfield_best.vec"
-    assert manifest["outputs"]["crossfield_best_rawfield"] == "fields/crossfield_best.rawfield"
+    assert "crossfield_best_rawfield" not in manifest["outputs"]
+    assert "crossfield_best_rosy" not in manifest["outputs"]
     assert manifest["outputs"]["geometry_npz"] == "geometry/mesh_geometry.npz"
+    assert manifest["outputs"]["sdf_samples_npz"] == "sdf/sdf_samples.npz"
     assert manifest["outputs"]["command_path"] == "logs/command.txt"
     assert manifest["quality"]["acceptance_report_json"] == "metrics/acceptance_report.json"
     assert manifest["training"]["python_version"]
     assert manifest["training"]["torch_version"]
     assert manifest["training"]["cuda_version"]
     assert manifest["training"]["platform"]
-    assert (dataset_root / "cube-sample" / "fields" / "crossfield_best.rawfield").exists()
     assert (dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz").exists()
+    assert (dataset_root / "cube-sample" / "sdf" / "sdf_samples.npz").exists()
     assert (dataset_root / "cube-sample" / "logs" / "command.txt").exists()
     assert (dataset_root / "cube-sample" / "metrics" / "acceptance_report.json").exists()
     geometry = np.load(dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz")
@@ -254,3 +263,9 @@ def test_generate_label_writes_manifest(tmp_path):
     assert "original_bounds_max" in geometry.files
     assert "normalized_bounds_min" in geometry.files
     assert "normalized_bounds_max" in geometry.files
+    sdf = np.load(dataset_root / "cube-sample" / "sdf" / "sdf_samples.npz")
+    assert "query_points" in sdf.files
+    assert "sdf_values" in sdf.files
+    assert "tsdf_values" in sdf.files
+    assert "sample_type" in sdf.files
+    assert "sign_reliability" in sdf.files

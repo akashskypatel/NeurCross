@@ -8,8 +8,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m neurcross",
         description=(
-            "NeurCross trains neural cross fields on triangle meshes and converts saved "
-            "cross-field snapshots into .rosy files for downstream quad extraction."
+            "NeurCross trains neural cross fields on triangle meshes and can package "
+            "per-mesh dataset labels around the resulting .vec field artifacts."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", metavar="command")
@@ -19,12 +19,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Train a cross field on an input mesh.",
     )
     train.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
-
-    convert = subparsers.add_parser(
-        "convert",
-        help="Convert a saved cross-field snapshot to a .rosy file.",
-    )
-    convert.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
 
     generate = subparsers.add_parser(
         "generate-label",
@@ -36,13 +30,11 @@ def build_parser() -> argparse.ArgumentParser:
         "High-level functionality:\n"
         "  train-quad-mesh     Train NeurCross on a mesh to produce cross-field snapshots.\n"
         "  train               Alias for train-quad-mesh.\n"
-        "  convert             Convert cross-field, .rosy, or .rawfield files.\n"
         "  generate-label      Generate a dataset sample package from one mesh.\n\n"
         "Examples:\n"
         "  python -m neurcross --help\n"
         "  python -m neurcross train-quad-mesh --help\n"
         "  python -m neurcross train --help\n"
-        "  python -m neurcross convert --help\n"
         "  python -m neurcross generate-label --help"
     )
     return parser
@@ -62,13 +54,6 @@ def main() -> None:
 
         sys.argv = ["neurcross-train-quad-mesh", *command_args]
         train_main()
-        return
-
-    if command == "convert":
-        from quad_mesh.convert_crossfield import main as convert_main
-
-        sys.argv = ["neurcross-convert", *command_args]
-        convert_main()
         return
 
     if command == "generate-label":

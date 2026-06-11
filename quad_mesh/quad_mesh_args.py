@@ -113,6 +113,17 @@ def add_args(parser):
         default=8.0,
         help='maximum estimated memory for cached mesh topology tensors; set <=0 to disable the preflight guard',
     )
+    parser.add_argument(
+        '--export_sdf_samples',
+        action='store_true',
+        help='export sdf/sdf_samples.npz for dataset-label runs',
+    )
+    parser.add_argument('--sdf_n_surface', type=int, default=512, help='number of exact surface samples for SDF export')
+    parser.add_argument('--sdf_n_near', type=int, default=512, help='number of near-surface samples for SDF export')
+    parser.add_argument('--sdf_n_uniform', type=int, default=1024, help='number of uniform volume samples for SDF export')
+    parser.add_argument('--sdf_near_sigma', type=float, default=0.02, help='gaussian sigma for near-surface SDF samples')
+    parser.add_argument('--tsdf_truncation', type=float, default=0.1, help='truncation distance used for TSDF export')
+    parser.add_argument('--sdf_uniform_extent', type=float, default=0.5, help='uniform query extent in normalized space for SDF export')
     parser.add_argument('--log_interval', type=int, default=10,
                         help='number of batches between training log updates')
     parser.add_argument(
@@ -196,11 +207,6 @@ def add_args(parser):
     parser.add_argument('--relax_morse', type=float, default=0.5, help='the max value of relax Morse')
     parser.add_argument('--use_vertices', type=bool, default=False, help='if False, sample points to overfitting')
     parser.add_argument('--featureLine_threshold', type=float, default=1.0)
-    parser.add_argument(
-        '--convert_crossfield_to_rosy',
-        action='store_true',
-        help='if set, also convert each saved cross-field snapshot to a QuadWild-compatible .rosy sidecar file',
-    )
 
 
     return parser

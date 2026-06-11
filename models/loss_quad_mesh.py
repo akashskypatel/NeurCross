@@ -5,15 +5,13 @@ import torch
 import torch.nn as nn
 
 import utils.utils as utils
-from quad_mesh.convert_crossfield import convert_crossfield_to_rosy
 
 
 class CrossFieldExportManager:
-    def __init__(self, out_dir, filename, *, convert_crossfield_to_rosy=False):
+    def __init__(self, out_dir, filename):
         self.output_dir = os.path.join(out_dir, 'save_crossField')
         self.metrics_dir = os.path.join(out_dir, 'metrics')
         self.filename = filename
-        self.convert_crossfield_to_rosy = convert_crossfield_to_rosy
         self.best_score = float('inf')
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.metrics_dir, exist_ok=True)
@@ -30,10 +28,8 @@ class CrossFieldExportManager:
     def _history_metrics_path(self, step):
         return os.path.join(self.metrics_dir, f'{self.filename}_iter_{step}.json')
 
-    def _copy_with_optional_rosy(self, source_path, target_path):
+    def _copy_snapshot(self, source_path, target_path):
         shutil.copyfile(source_path, target_path)
-        if self.convert_crossfield_to_rosy:
-            convert_crossfield_to_rosy(target_path)
 
     def _write_meta(self, suffix, *, step, total_loss, field_score):
         with open(self._meta_path(suffix), 'w', encoding='utf-8', newline='\n') as handle:
@@ -73,12 +69,10 @@ class CrossFieldExportManager:
             output_dir=self.output_dir,
             shapename=self.filename,
         )
-        if self.convert_crossfield_to_rosy:
-            convert_crossfield_to_rosy(history_path)
         report["history_crossfield_path"] = history_path
 
         latest_path = self._sidecar_path('latest')
-        self._copy_with_optional_rosy(history_path, latest_path)
+        self._copy_snapshot(history_path, latest_path)
         self._write_meta('latest', step=step, total_loss=total_loss, field_score=field_score)
         self._write_metrics_json(self._history_metrics_path(step), report)
         self._write_metrics_json(self._metrics_path('latest'), report)
@@ -86,13 +80,13 @@ class CrossFieldExportManager:
         if field_score < self.best_score:
             self.best_score = field_score
             best_path = self._sidecar_path('best')
-            self._copy_with_optional_rosy(history_path, best_path)
+            self._copy_snapshot(history_path, best_path)
             self._write_meta('best', step=step, total_loss=total_loss, field_score=field_score)
             self._write_metrics_json(self._metrics_path('best'), report)
 
         if is_final:
             final_path = self._sidecar_path('final')
-            self._copy_with_optional_rosy(history_path, final_path)
+            self._copy_snapshot(history_path, final_path)
             self._write_meta('final', step=step, total_loss=total_loss, field_score=field_score)
             self._write_metrics_json(self._metrics_path('final'), report)
 
@@ -110,14 +104,9 @@ def export_crossfield_snapshot(
     field_score=None,
     metrics=None,
     is_final=False,
-    convert_crossfield_to_rosy=False,
 ):
     if manager is None:
-        manager = CrossFieldExportManager(
-            out_dir,
-            filename,
-            convert_crossfield_to_rosy=convert_crossfield_to_rosy,
-        )
+        manager = CrossFieldExportManager(out_dir, filename)
     if total_loss is None:
         total_loss = 0.0
     if field_score is None:
@@ -157,7 +146,7 @@ class MorseLoss_quad_mesh(nn.Module):
     def __init__(self, weights=None, loss_type='siren_wo_n_w_morse', div_decay='none',
                  div_type='l1', vertex_neighbors_list=None,
                  vertex_neighbors=None, axis_angle_R_mat_list=None, device=None,
-                 convert_crossfield_to_rosy=False, max_topology_memory_gb=8.0):
+                 max_topology_memory_gb=8.0):
         super().__init__()
         if weights is None:
             weights = [7e3, 6e2, 10, 5e1, 30, 3]
@@ -167,7 +156,6 @@ class MorseLoss_quad_mesh(nn.Module):
         self.div_type = div_type
         self.use_morse = True if 'morse' in self.loss_type else False
         self.device = device
-        self.convert_crossfield_to_rosy = convert_crossfield_to_rosy
         self.max_topology_memory_gb = float(max_topology_memory_gb)
         self._export_manager = None
 
@@ -484,7 +472,6 @@ class MorseLoss_quad_mesh(nn.Module):
                 self._export_manager = CrossFieldExportManager(
                     out_dir,
                     filename,
-                    convert_crossfield_to_rosy=self.convert_crossfield_to_rosy,
                 )
             export_crossfield_snapshot(
                 vector_alpha,
@@ -497,7 +484,6 @@ class MorseLoss_quad_mesh(nn.Module):
                 field_score=metrics["score"],
                 metrics=metrics,
                 is_final=is_final_export,
-                convert_crossfield_to_rosy=self.convert_crossfield_to_rosy,
             )
 
 

@@ -8,8 +8,6 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from .convert_crossfield import convert_crossfield_to_rawfield
-
 
 def _sha256_file(path: str) -> str:
     digest = hashlib.sha256()
@@ -148,6 +146,7 @@ def build_manifest(
     stopped_early: bool,
     stop_summary: dict | None,
     runtime_info: dict[str, object] | None = None,
+    sdf_samples_path: str | None = None,
 ) -> dict[str, object]:
     runtime_info = runtime_info or {}
     source_mesh_name = os.path.basename(source_mesh_path)
@@ -167,19 +166,11 @@ def build_manifest(
     source_format = os.path.splitext(source_mesh_name)[1].lstrip(".").lower()
     best_vec_source = os.path.join(output_dir, "save_crossField", f"{mesh_name}_best.vec")
     final_vec_source = os.path.join(output_dir, "save_crossField", f"{mesh_name}_final.vec")
-    best_rosy_source = os.path.join(output_dir, "save_crossField", f"{mesh_name}_best.rosy")
-    final_rosy_source = os.path.join(output_dir, "save_crossField", f"{mesh_name}_final.rosy")
     best_metrics_source = os.path.join(output_dir, "metrics", f"{mesh_name}_best.json")
     final_metrics_source = os.path.join(output_dir, "metrics", f"{mesh_name}_final.json")
 
     best_vec_path = _copy_required(best_vec_source, os.path.join(fields_dir, "crossfield_best.vec"))
     final_vec_path = _copy_if_exists(final_vec_source, os.path.join(fields_dir, "crossfield_final.vec"))
-    best_rosy_path = _copy_if_exists(best_rosy_source, os.path.join(fields_dir, "crossfield_best.rosy"))
-    final_rosy_path = _copy_if_exists(final_rosy_source, os.path.join(fields_dir, "crossfield_final.rosy"))
-    best_rawfield_path = str(convert_crossfield_to_rawfield(best_vec_path))
-    final_rawfield_path = None
-    if final_vec_path:
-        final_rawfield_path = str(convert_crossfield_to_rawfield(final_vec_path))
     geometry_npz_path = _export_geometry_npz(normalized_obj_source, geometry_dir, normalization)
     best_metrics_path = _copy_required(best_metrics_source, os.path.join(metrics_dir, "train_metrics_best.json"))
     final_metrics_path = _copy_if_exists(final_metrics_source, os.path.join(metrics_dir, "train_metrics_final.json"))
@@ -259,15 +250,10 @@ def build_manifest(
             "selected_label": "best",
             "crossfield_best_vec": _rel(output_dir, best_vec_path),
             "metrics_best_json": _rel(output_dir, best_metrics_path),
-            "crossfield_best_rosy": _rel(output_dir, best_rosy_path),
-            "crossfield_best_rawfield": _rel(output_dir, best_rawfield_path),
             "crossfield_final_vec": _rel(output_dir, final_vec_path),
             "metrics_final_json": _rel(output_dir, final_metrics_path),
-            "crossfield_final_rawfield": _rel(output_dir, final_rawfield_path),
             "geometry_npz": _rel(output_dir, geometry_npz_path),
-            "sdf_samples_npz": None,
-            "quad_mesh_path": None,
-            "quad_metrics_json": None,
+            "sdf_samples_npz": _rel(output_dir, sdf_samples_path),
             "log_path": _rel(output_dir, log_copy_path),
             "command_path": _rel(output_dir, command_txt_path),
         },
@@ -376,6 +362,7 @@ def package_dataset_sample(
     stopped_early: bool,
     stop_summary: dict | None,
     runtime_info: dict[str, object] | None = None,
+    sdf_samples_path: str | None = None,
 ) -> str:
     created_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     manifest = build_manifest(
@@ -398,5 +385,6 @@ def package_dataset_sample(
         stopped_early=stopped_early,
         stop_summary=stop_summary,
         runtime_info=runtime_info,
+        sdf_samples_path=sdf_samples_path,
     )
     return write_manifest(manifest, output_dir)

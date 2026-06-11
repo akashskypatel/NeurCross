@@ -67,13 +67,7 @@ The package exposes a high-level module entry point:
 ```powershell
 python -m neurcross --help
 python -m neurcross train-quad-mesh --help
-python -m neurcross convert --help
-```
-
-It also exposes conversion commands for downstream QuadWild-compatible `.rosy` files and the 3D `.rawfield` interchange format:
-
-```powershell
-python -m neurcross convert D:\path\to\crossfield.vec --format rosy
+python -m neurcross generate-label --help
 ```
 
 ## Using NeurCross From Another Python Module
@@ -84,9 +78,6 @@ The installed package exposes a small programmatic API through `neurcross`:
 - `neurcross.load_checkpoint(...)`
 - `neurcross.load_trained_model(...)`
 - `neurcross.predict_crossfield(...)`
-- `neurcross.convert_crossfield_to_rosy(...)`
-- `neurcross.convert_crossfield_to_rawfield(...)`
-- `neurcross.convert_rawfield_to_rosy(...)`
 
 Example:
 
@@ -111,18 +102,6 @@ print(result.best_checkpoint_path)
 print(result.weights_path)
 print(result.total_elapsed_seconds)
 print(result.stopped_early)
-
-rosy_path = neurcross.convert_crossfield_to_rosy(
-    r"D:\path\to\output\mesh\save_crossField\mesh_final.vec"
-)
-
-rawfield_path = neurcross.convert_crossfield_to_rawfield(
-    r"D:\path\to\output\mesh\save_crossField\mesh_final.vec"
-)
-
-rosy_from_rawfield_path = neurcross.convert_rawfield_to_rosy(
-    r"D:\path\to\field.rawfield"
-)
 ```
 
 `train_crossfield(...)` returns a `TrainingResult` object with:
@@ -206,12 +185,6 @@ if __name__ == "__main__":
     main()
 ```
 
-`convert_crossfield_to_rosy(...)` reads a saved NeurCross `.vec` cross-field snapshot and writes a QuadWild-compatible `.rosy` file.
-
-`convert_crossfield_to_rawfield(...)` reads a saved NeurCross `.vec` cross-field snapshot and writes this package's 3D `.rawfield` interchange format. This requires the snapshot rows to contain both cross-field branches, so each row must provide at least 6 floating-point values.
-
-`convert_rawfield_to_rosy(...)` reads this package's 3D `.rawfield` interchange format and writes a `.rosy` file using the first tangent direction in each rawfield row.
-
 The source checkout includes `data/doubleTorus/input/doubleTorus.ply`, so `--data_path` can be omitted when training from the repo. The wheel does not bundle sample training data, so `--data_path` is required after installation.
 
 ## Overfitting
@@ -284,7 +257,6 @@ The training entry point accepts the following arguments.
 | `--relax_morse` | `0.5` | Upper bound used by the relaxed Morse formulation. |
 | `--use_vertices` | `False` | Controls whether to use vertices directly instead of the default sampled points. The code comment suggests `False` is used to avoid overfitting. |
 | `--featureLine_threshold` | `1.0` | Threshold related to feature-line behavior in the cross-field pipeline. |
-| `--convert_crossfield_to_rosy` | disabled | If enabled, every saved `save_crossField/*.vec` snapshot is also converted into a QuadWild-compatible `.rosy` sidecar file. |
 | `--early_stop` | disabled | Enables early stopping based on smoothed loss plateau detection and optional theta-term thresholds. |
 | `--early_stop_min_steps` | `1000` | Minimum number of global training steps before early stopping can trigger. |
 | `--early_stop_patience` | `500` | Number of steps without sufficient smoothed-loss improvement before plateau stopping triggers. |
@@ -476,7 +448,7 @@ python -m neurcross train-quad-mesh `
 
 When early stopping triggers, the current field is still exported and marked as the final output.
 
-### Cross-field To `.rosy`
+### Cross-field Snapshots
 
 NeurCross saves intermediate cross-field snapshots under:
 
@@ -484,7 +456,7 @@ NeurCross saves intermediate cross-field snapshots under:
 <out_dir>\<mesh-name>\save_crossField\
 ```
 
-The current export manager preserves history snapshots and also maintains stable aliases for downstream tools:
+The current export manager preserves history snapshots and also maintains stable aliases:
 
 ```text
 save_crossField\
@@ -499,20 +471,9 @@ save_crossField\
 
 `latest` is overwritten every export, `best` is updated when the field-quality score improves, and `final` is written when training completes or stops early.
 
-If `--convert_crossfield_to_rosy` is enabled, these `.vec` outputs also receive QuadWild-compatible `.rosy` sidecars during training.
-
 The preserved `*_iter_<global_step>.vec` snapshots use the global training step, so multi-epoch runs no longer overwrite earlier exports.
 
-You can also convert a saved cross-field file manually:
-
-```powershell
-# convert to rosy format
-python -m neurcross convert D:\path\to\crossfield_iter_499.vec --format rosy
-# convert to rawfield format
-python -m neurcross convert D:\path\to\crossfield_iter_499.vec --format rawfield
-# convert rawfield back to rosy format
-python -m neurcross convert D:\path\to\field.rawfield --input-format rawfield --format rosy
-```
+NeurCross now treats `.vec` as its only field artifact output. Downstream field conversion and quad extraction belong in NeuralQuad.
 
 ## Metrics Reporting
 

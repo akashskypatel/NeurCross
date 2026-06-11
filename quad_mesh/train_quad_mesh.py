@@ -229,6 +229,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     from .normalize import export_normalized_mesh
     from .preflight import inspect_mesh_path
     from .export_dataset_sample import package_dataset_sample
+    from .sdf_samples import export_sdf_samples
 
     # get training parameters
     args = _build_training_args(argv=argv, args=args, **overrides)
@@ -408,8 +409,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                               div_type=args.morse_type,
                               vertex_neighbors_list=vertex_neighbors_list,
                               vertex_neighbors=vertex_neighbors, axis_angle_R_mat_list=axis_angle_R_mat_list,
-                              device=device, convert_crossfield_to_rosy=args.convert_crossfield_to_rosy,
-                              max_topology_memory_gb=args.max_topology_memory_gb
+                              device=device, max_topology_memory_gb=args.max_topology_memory_gb
                               )
     except torch.cuda.OutOfMemoryError as exc:
         _raise_cuda_oom_guidance(exc, context="topology cache setup")
@@ -456,6 +456,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     best_checkpoint_path = None
     weights_path = None
     manifest_path = None
+    sdf_samples_path = None
     best_loss = min(loss_history) if loss_history else float('inf')
     last_epoch = start_epoch
     last_batch_idx = start_batch_idx
@@ -669,7 +670,6 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                                 }
                             },
                             is_final=True,
-                            convert_crossfield_to_rosy=args.convert_crossfield_to_rosy,
                         )
                     utils.log_string(
                         "Early stopping triggered at global_step={} epoch={} batch_idx={} reason={} "
@@ -719,6 +719,19 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         )
     log_path = log_file.name
     log_file.close()
+    if getattr(args, "export_sdf_samples", False):
+        sdf_samples_path = export_sdf_samples(
+            mesh_path=normalized_export.obj_path,
+            output_dir=os.path.join(out_dir, "sdf"),
+            normalization=normalized_export.metadata.to_dict(),
+            seed=args.seed,
+            n_surface=args.sdf_n_surface,
+            n_near=args.sdf_n_near,
+            n_uniform=args.sdf_n_uniform,
+            near_sigma=args.sdf_near_sigma,
+            uniform_extent=args.sdf_uniform_extent,
+            tsdf_truncation=args.tsdf_truncation,
+        )
     if getattr(args, "dataset_root", None):
         from neurcross import __version__ as neurcross_version
 
@@ -753,6 +766,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             stopped_early=stopped_early,
             stop_summary=stop_summary,
             runtime_info=runtime_info,
+            sdf_samples_path=sdf_samples_path,
         )
     return TrainingResult(
         args=args,
