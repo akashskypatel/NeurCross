@@ -182,6 +182,49 @@ def _remap_path(path: str | None, old_root: str, new_root: str) -> str | None:
     return os.path.join(new_root, rel_path)
 
 
+def _capture_failed_dataset_run(
+    *,
+    args,
+    argv,
+    out_dir: str,
+    preflight_report,
+    run_started_utc: str,
+    run_start_time: float,
+    log_file,
+    failure_message: str,
+):
+    from .export_dataset_sample import package_failed_dataset_sample
+    from .checkpoint_utils import utc_timestamp
+    from neurcross import __version__ as neurcross_version
+    log_path = log_file.name
+    log_file.close()
+    run_finished_utc = utc_timestamp()
+    elapsed_seconds = time.perf_counter() - run_start_time
+    training_command = _build_training_command(args, argv)
+    manifest_path = package_failed_dataset_sample(
+        output_dir=out_dir,
+        sample_id=args.sample_id,
+        source_mesh_path=args.data_path,
+        preflight_report=preflight_report.to_dict(),
+        args_dict=dict(vars(args)),
+        device=getattr(args, "device", "unknown"),
+        started_at_utc=run_started_utc,
+        finished_at_utc=run_finished_utc,
+        elapsed_seconds=elapsed_seconds,
+        neurcross_version=neurcross_version,
+        training_command=training_command,
+        quality_gate=getattr(args, "quality_gate", "default"),
+        failure_reason=failure_message,
+        log_path=log_path,
+    )
+    failed_out_dir = _relocate_dataset_sample(args, out_dir, "failed")
+    return (
+        failed_out_dir,
+        _remap_path(log_path, out_dir, failed_out_dir),
+        _remap_path(manifest_path, out_dir, failed_out_dir),
+    )
+
+
 def _enforce_preflight_policy(preflight_report, policy: str):
     if preflight_report.status == "skip":
         return preflight_report
@@ -414,7 +457,20 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
         # get data loaders
         utils.same_seed(args.seed, deterministic=not args.fast_nondeterministic)
-        train_set = dataset.ReconDataset(training_mesh_path, args.n_points, args.n_samples, args.grid_res)
+        train_set = dataset.ReconDataset(
+            training_mesh_path,
+            args.n_points,
+            args.n_samples,
+            args.grid_res,
+            nonmnfld_sample_type=args.nonmnfld_sample_type,
+            near_surface_ratio=args.near_surface_ratio,
+            uniform_ratio=args.uniform_ratio,
+            feature_ratio=args.feature_ratio,
+            boundary_ratio=args.boundary_ratio,
+            near_surface_sigma=args.near_surface_sigma,
+            uniform_extent=args.uniform_extent,
+            seed=args.seed,
+        )
         static_batch = train_set.get_static_batch()
 
         train_dataloader = torch.utils.data.DataLoader(
@@ -427,33 +483,18 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         )
     except Exception as exc:
         if getattr(args, "dataset_root", None):
-            from neurcross import __version__ as neurcross_version
-
             failure_message = "{}: {}".format(type(exc).__name__, exc)
             utils.log_string("Dataset-label setup failed: {}".format(failure_message), log_file)
-            log_path = log_file.name
-            log_file.close()
-            run_finished_utc = utc_timestamp()
-            elapsed_seconds = time.perf_counter() - run_start_time
-            training_command = _build_training_command(args, argv)
-            manifest_path = package_failed_dataset_sample(
-                output_dir=out_dir,
-                sample_id=args.sample_id,
-                source_mesh_path=args.data_path,
-                preflight_report=preflight_report.to_dict(),
-                args_dict=dict(vars(args)),
-                device=args.device,
-                started_at_utc=run_started_utc,
-                finished_at_utc=run_finished_utc,
-                elapsed_seconds=elapsed_seconds,
-                neurcross_version=neurcross_version,
-                training_command=training_command,
-                quality_gate=getattr(args, "quality_gate", "default"),
-                failure_reason=failure_message,
-                log_path=log_path,
+            failed_out_dir, _failed_log_path, _failed_manifest_path = _capture_failed_dataset_run(
+                args=args,
+                argv=argv,
+                out_dir=out_dir,
+                preflight_report=preflight_report,
+                run_started_utc=run_started_utc,
+                run_start_time=run_start_time,
+                log_file=log_file,
+                failure_message=failure_message,
             )
-            failed_out_dir = _relocate_dataset_sample(args, out_dir, "failed")
-            relocated_manifest = _remap_path(manifest_path, out_dir, failed_out_dir)
             raise RuntimeError(
                 "Dataset-label setup failed; artifacts captured under {}".format(failed_out_dir)
             ) from exc
@@ -643,6 +684,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
     # For each epoch
     for epoch in range(start_epoch, args.num_epochs):
+        if hasattr(train_set, "set_epoch"):
+            train_set.set_epoch(epoch)
         for batch_idx, data in enumerate(train_dataloader):
             if epoch == start_epoch and start_batch_idx >= 0 and batch_idx <= start_batch_idx:
                 continue
@@ -692,7 +735,26 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 torch.nn.utils.clip_grad_norm_(net.parameters(), args.grad_clip_norm)
 
             SAVE_BEST = False
-            optimizer.step()
+            try:
+                optimizer.step()
+            except Exception as exc:
+                if getattr(args, "dataset_root", None):
+                    failure_message = "training_step_failed: {}: {}".format(type(exc).__name__, exc)
+                    utils.log_string("Dataset-label training failed: {}".format(failure_message), log_file)
+                    failed_out_dir, _failed_log_path, _failed_manifest_path = _capture_failed_dataset_run(
+                        args=args,
+                        argv=argv,
+                        out_dir=out_dir,
+                        preflight_report=preflight_report,
+                        run_started_utc=run_started_utc,
+                        run_start_time=run_start_time,
+                        log_file=log_file,
+                        failure_message=failure_message,
+                    )
+                    raise RuntimeError(
+                        "Dataset-label training failed; artifacts captured under {}".format(failed_out_dir)
+                    ) from exc
+                raise
             batch_elapsed = time.perf_counter() - batch_start_time
             current_loss_value = float(loss_dict["loss"].detach().cpu().item())
             loss_history.append(current_loss_value)
@@ -842,84 +904,102 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         if stopped_early:
             break
 
-    total_elapsed = time.perf_counter() - run_start_time
-    run_finished_utc = utc_timestamp()
-    if stopped_early:
-        utils.log_string("Training stopped early in {}".format(_format_duration(total_elapsed)), log_file)
-    else:
-        utils.log_string("Training finished in {}".format(_format_duration(total_elapsed)), log_file)
-    final_checkpoint_path = _save_training_checkpoint(
-        "final_checkpoint.pt",
-        last_epoch,
-        last_batch_idx,
-        next_global_step,
-    )
-    checkpoint_path = final_checkpoint_path
-    if args.export_weights_only:
-        weights_path = save_model_weights_only(
-            net.state_dict(),
-            checkpoint_dir,
-            filename="model_weights.pt",
+    try:
+        total_elapsed = time.perf_counter() - run_start_time
+        run_finished_utc = utc_timestamp()
+        if stopped_early:
+            utils.log_string("Training stopped early in {}".format(_format_duration(total_elapsed)), log_file)
+        else:
+            utils.log_string("Training finished in {}".format(_format_duration(total_elapsed)), log_file)
+        final_checkpoint_path = _save_training_checkpoint(
+            "final_checkpoint.pt",
+            last_epoch,
+            last_batch_idx,
+            next_global_step,
         )
-    log_path = log_file.name
-    log_file.close()
-    if getattr(args, "export_sdf_samples", False):
-        sdf_samples_path = export_sdf_samples(
-            mesh_path=normalized_export.obj_path,
-            output_dir=os.path.join(out_dir, "sdf"),
-            normalization=normalized_export.metadata.to_dict(),
-            seed=args.seed,
-            n_surface=args.sdf_n_surface,
-            n_near=args.sdf_n_near,
-            n_uniform=args.sdf_n_uniform,
-            near_sigma=args.sdf_near_sigma,
-            uniform_extent=args.sdf_uniform_extent,
-            tsdf_truncation=args.tsdf_truncation,
-        )
-    if getattr(args, "dataset_root", None):
-        from neurcross import __version__ as neurcross_version
+        checkpoint_path = final_checkpoint_path
+        if args.export_weights_only:
+            weights_path = save_model_weights_only(
+                net.state_dict(),
+                checkpoint_dir,
+                filename="model_weights.pt",
+            )
+        log_path = log_file.name
+        log_file.close()
+        if getattr(args, "export_sdf_samples", False):
+            sdf_samples_path = export_sdf_samples(
+                mesh_path=normalized_export.obj_path,
+                output_dir=os.path.join(out_dir, "sdf"),
+                normalization=normalized_export.metadata.to_dict(),
+                seed=args.seed,
+                n_surface=args.sdf_n_surface,
+                n_near=args.sdf_n_near,
+                n_uniform=args.sdf_n_uniform,
+                near_sigma=args.sdf_near_sigma,
+                uniform_extent=args.sdf_uniform_extent,
+                tsdf_truncation=args.tsdf_truncation,
+            )
+        if getattr(args, "dataset_root", None):
+            from neurcross import __version__ as neurcross_version
 
-        training_command = _build_training_command(args, argv)
-        runtime_info = {
-            "git_commit": None,
-            "python_version": sys.version.split()[0],
-            "torch_version": getattr(torch, "__version__", None),
-            "cuda_version": getattr(getattr(torch, "version", None), "cuda", None),
-            "platform": platform.platform(),
-        }
-        manifest_path = package_dataset_sample(
-            output_dir=out_dir,
-            sample_id=args.sample_id,
-            mesh_name=file_name,
-            source_mesh_path=args.data_path,
-            normalized_mesh_ply_path=normalized_export.ply_path,
-            preflight_report=preflight_report.to_dict(),
-            normalization=normalized_export.metadata.to_dict(),
-            args_dict=dict(vars(args)),
-            device=device,
-            log_path=log_path,
-            started_at_utc=run_started_utc,
-            finished_at_utc=run_finished_utc,
-            elapsed_seconds=total_elapsed,
-            neurcross_version=neurcross_version,
-            training_command=training_command,
-            stopped_early=stopped_early,
-            stop_summary=stop_summary,
-            runtime_info=runtime_info,
-            sdf_samples_path=sdf_samples_path,
-            export_geometry_npz=getattr(args, "export_geometry_npz", True),
-            quality_gate=getattr(args, "quality_gate", "default"),
-        )
-        with open(manifest_path, "r", encoding="utf-8") as handle:
-            manifest = json.load(handle)
-        if not manifest["quality"]["accepted"]:
-            quarantine_out_dir = _relocate_dataset_sample(args, out_dir, "quarantine")
-            log_path = _remap_path(log_path, out_dir, quarantine_out_dir)
-            checkpoint_path = _remap_path(checkpoint_path, out_dir, quarantine_out_dir)
-            best_checkpoint_path = _remap_path(best_checkpoint_path, out_dir, quarantine_out_dir)
-            weights_path = _remap_path(weights_path, out_dir, quarantine_out_dir)
-            manifest_path = _remap_path(manifest_path, out_dir, quarantine_out_dir)
-            out_dir = quarantine_out_dir
+            training_command = _build_training_command(args, argv)
+            runtime_info = {
+                "git_commit": None,
+                "python_version": sys.version.split()[0],
+                "torch_version": getattr(torch, "__version__", None),
+                "cuda_version": getattr(getattr(torch, "version", None), "cuda", None),
+                "platform": platform.platform(),
+            }
+            manifest_path = package_dataset_sample(
+                output_dir=out_dir,
+                sample_id=args.sample_id,
+                mesh_name=file_name,
+                source_mesh_path=args.data_path,
+                normalized_mesh_ply_path=normalized_export.ply_path,
+                preflight_report=preflight_report.to_dict(),
+                normalization=normalized_export.metadata.to_dict(),
+                args_dict=dict(vars(args)),
+                device=device,
+                log_path=log_path,
+                started_at_utc=run_started_utc,
+                finished_at_utc=run_finished_utc,
+                elapsed_seconds=total_elapsed,
+                neurcross_version=neurcross_version,
+                training_command=training_command,
+                stopped_early=stopped_early,
+                stop_summary=stop_summary,
+                runtime_info=runtime_info,
+                sdf_samples_path=sdf_samples_path,
+                export_geometry_npz=getattr(args, "export_geometry_npz", True),
+                quality_gate=getattr(args, "quality_gate", "default"),
+            )
+            with open(manifest_path, "r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            if not manifest["quality"]["accepted"]:
+                quarantine_out_dir = _relocate_dataset_sample(args, out_dir, "quarantine")
+                log_path = _remap_path(log_path, out_dir, quarantine_out_dir)
+                checkpoint_path = _remap_path(checkpoint_path, out_dir, quarantine_out_dir)
+                best_checkpoint_path = _remap_path(best_checkpoint_path, out_dir, quarantine_out_dir)
+                weights_path = _remap_path(weights_path, out_dir, quarantine_out_dir)
+                manifest_path = _remap_path(manifest_path, out_dir, quarantine_out_dir)
+                out_dir = quarantine_out_dir
+    except Exception as exc:
+        if getattr(args, "dataset_root", None):
+            failure_message = "training_finalize_failed: {}: {}".format(type(exc).__name__, exc)
+            failed_out_dir, _failed_log_path, _failed_manifest_path = _capture_failed_dataset_run(
+                args=args,
+                argv=argv,
+                out_dir=out_dir,
+                preflight_report=preflight_report,
+                run_started_utc=run_started_utc,
+                run_start_time=run_start_time,
+                log_file=log_file,
+                failure_message=failure_message,
+            )
+            raise RuntimeError(
+                "Dataset-label finalization failed; artifacts captured under {}".format(failed_out_dir)
+            ) from exc
+        raise
     return TrainingResult(
         args=args,
         output_dir=out_dir,

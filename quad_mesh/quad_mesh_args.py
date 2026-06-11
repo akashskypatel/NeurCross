@@ -33,6 +33,11 @@ def add_args(parser):
         help='allow writing into an existing dataset sample directory when using generate-label',
     )
     parser.add_argument(
+        '--fail_fast',
+        action='store_true',
+        help='stop batch generate-label runs on the first sample failure instead of continuing',
+    )
+    parser.add_argument(
         '--normalize_mesh',
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -77,8 +82,18 @@ def add_args(parser):
         help='number of sampled points generated inside each training batch; this does not control epoch length',
     )
     parser.add_argument('--grid_res', type=int, default=256, help='uniform grid resolution')
-    parser.add_argument('--nonmnfld_sample_type', type=str, default='gaussian',
-                        help='how to sample points off the manifold - grid | gaussian | combined')
+    parser.add_argument(
+        '--nonmnfld_sample_type',
+        choices=('uniform', 'near_surface', 'mixed', 'feature_biased', 'grid', 'gaussian', 'combined'),
+        default='uniform',
+        help='how to sample off-manifold points for training',
+    )
+    parser.add_argument('--near_surface_ratio', type=float, default=None, help='mixed-mode ratio allocated to near-surface off-manifold samples')
+    parser.add_argument('--uniform_ratio', type=float, default=None, help='mixed-mode ratio allocated to uniform volume off-manifold samples')
+    parser.add_argument('--feature_ratio', type=float, default=None, help='mixed-mode ratio allocated to feature-biased off-manifold samples')
+    parser.add_argument('--boundary_ratio', type=float, default=0.5, help='feature-biased blend between boundary emphasis and normal-variation emphasis')
+    parser.add_argument('--near_surface_sigma', type=float, default=None, help='optional fixed sigma for near-surface sampling in normalized coordinates')
+    parser.add_argument('--uniform_extent', type=float, default=None, help='uniform off-manifold sampling extent in normalized coordinates')
 
     # training parameters
     parser.add_argument('--num_epochs', type=int, default=10, help='number of training epochs')

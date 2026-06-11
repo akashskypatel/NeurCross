@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 
 import trimesh
 
@@ -49,6 +50,7 @@ def test_generate_label_parser_accepts_dataset_args():
     assert args.quality_gate == "loose"
     assert args.export_geometry_npz is False
     assert args.normalize_mesh is False
+    assert args.fail_fast is False
 
 
 def test_cli_help_lists_generate_label():
@@ -58,6 +60,111 @@ def test_cli_help_lists_generate_label():
     help_text = parser.format_help()
 
     assert "generate-label" in help_text
+
+
+def test_resolve_input_meshes_accepts_directory_and_list(tmp_path):
+    from quad_mesh.generate_label import resolve_input_meshes
+
+    mesh_a = tmp_path / "a.obj"
+    mesh_b = tmp_path / "nested" / "b.ply"
+    mesh_b.parent.mkdir()
+    mesh_a.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+    mesh_b.write_text("ply\nformat ascii 1.0\ncomment test\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n", encoding="utf-8")
+
+    meshes_from_dir, base_dir = resolve_input_meshes(str(tmp_path))
+    assert meshes_from_dir == [str(mesh_a.resolve()), str(mesh_b.resolve())]
+    assert base_dir == str(tmp_path.resolve())
+
+    mesh_list = tmp_path / "meshes.txt"
+    mesh_list.write_text("a.obj\nnested/b.ply\n", encoding="utf-8")
+    meshes_from_list, list_base = resolve_input_meshes(str(mesh_list))
+    assert meshes_from_list == [str(mesh_a.resolve()), str(mesh_b.resolve())]
+    assert list_base == str(tmp_path.resolve())
+
+
+def test_generate_label_batch_writes_summary_and_continues(tmp_path, monkeypatch):
+    from quad_mesh.generate_label import main as generate_label_main
+
+    mesh_a = tmp_path / "a.obj"
+    mesh_b = tmp_path / "b.obj"
+    for mesh_path in (mesh_a, mesh_b):
+        mesh_path.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+
+    dataset_root = tmp_path / "dataset"
+
+    def _fake_train(*, args, allow_multiprocessing_workers):
+        sample_dir = Path(args.dataset_root) / args.sample_id
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "sample_state": "completed",
+            "quality": {"accepted": True},
+        }
+        manifest_path = sample_dir / "manifest.json"
+        if os.path.basename(args.data_path) == "b.obj":
+            manifest["sample_state"] = "failed"
+            manifest["quality"]["accepted"] = False
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            raise RuntimeError("forced-batch-failure")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        class _Result:
+            pass
+
+        result = _Result()
+        result.output_dir = str(sample_dir)
+        result.manifest_path = str(manifest_path)
+        return result
+
+    monkeypatch.setattr("quad_mesh.train_quad_mesh.train_crossfield", _fake_train)
+
+    generate_label_main(
+        [
+            "--data_path",
+            str(tmp_path),
+            "--dataset_root",
+            str(dataset_root),
+        ]
+    )
+
+    summary_path = dataset_root / "dataset_summary.json"
+    assert summary_path.exists()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["total_samples"] == 2
+    assert summary["counts"]["accepted"] == 1
+    assert summary["counts"]["failed"] == 1
+
+
+def test_generate_label_batch_fail_fast_stops_on_first_failure(tmp_path, monkeypatch):
+    from quad_mesh.generate_label import main as generate_label_main
+
+    mesh_a = tmp_path / "a.obj"
+    mesh_b = tmp_path / "b.obj"
+    for mesh_path in (mesh_a, mesh_b):
+        mesh_path.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+
+    calls = []
+
+    def _fake_train(*, args, allow_multiprocessing_workers):
+        calls.append(os.path.basename(args.data_path))
+        raise RuntimeError("forced-fail-fast")
+
+    monkeypatch.setattr("quad_mesh.train_quad_mesh.train_crossfield", _fake_train)
+
+    try:
+        generate_label_main(
+            [
+                "--data_path",
+                str(tmp_path),
+                "--dataset_root",
+                str(tmp_path / "dataset"),
+                "--fail_fast",
+            ]
+        )
+    except RuntimeError as exc:
+        assert "forced-fail-fast" in str(exc)
+    else:
+        raise AssertionError("generate-label should stop on the first batch failure with --fail_fast")
+
+    assert calls == ["a.obj"]
 
 
 def test_generate_label_strict_preflight_writes_skipped_manifest(tmp_path):

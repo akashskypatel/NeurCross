@@ -210,8 +210,6 @@ def test_generate_label_writes_manifest(tmp_path):
             "--overwrite",
             "--device",
             "cuda",
-            "--quality_gate",
-            "strict",
             "--no-export_geometry_npz",
             "--num_epochs",
             "1",
@@ -251,7 +249,7 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["outputs"]["sdf_samples_npz"] == "sdf/sdf_samples.npz"
     assert manifest["outputs"]["command_path"] == "logs/command.txt"
     assert manifest["quality"]["acceptance_report_json"] == "metrics/acceptance_report.json"
-    assert manifest["quality"]["quality_gate"] == "strict"
+    assert manifest["quality"]["quality_gate"] == "default"
     assert manifest["training"]["python_version"]
     assert manifest["training"]["torch_version"]
     assert manifest["training"]["cuda_version"]
@@ -323,3 +321,57 @@ def test_generate_label_quarantines_low_quality(tmp_path, monkeypatch):
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["quality"]["accepted"] is False
+
+
+def test_generate_label_captures_training_step_failure(tmp_path, monkeypatch):
+    _require_cuda_torch()
+    import json
+    import torch.optim as optim
+    from quad_mesh.generate_label import main as generate_label_main
+
+    mesh_path = _cube_mesh_path()
+    if not os.path.exists(mesh_path):
+        pytest.skip("sample cube mesh is not available")
+
+    def _boom(self, closure=None):
+        raise RuntimeError("forced-step-failure")
+
+    monkeypatch.setattr(optim.Adam, "step", _boom)
+
+    dataset_root = tmp_path / "dataset"
+    with pytest.raises(RuntimeError, match="artifacts captured under"):
+        generate_label_main(
+            [
+                "--data_path",
+                mesh_path,
+                "--dataset_root",
+                str(dataset_root),
+                "--sample_id",
+                "cube-failed-step",
+                "--overwrite",
+                "--device",
+                "cuda",
+                "--num_epochs",
+                "1",
+                "--n_samples",
+                "1",
+                "--n_points",
+                "16",
+                "--batch_size",
+                "1",
+                "--num_workers",
+                "0",
+                "--log_interval",
+                "1",
+                "--save_checkpoint_interval",
+                "1",
+                "--fast_nondeterministic",
+            ]
+        )
+
+    manifest_path = dataset_root / "failed" / "cube-failed-step" / "manifest.json"
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["sample_state"] == "failed"
+    assert manifest["quality"]["accepted"] is False
+    assert "forced-step-failure" in manifest["quality"]["failure_reason"]
