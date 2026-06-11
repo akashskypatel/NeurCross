@@ -121,6 +121,8 @@ def test_dataset_parser_accepts_new_sampling_controls():
     assert args.feature_angle_threshold == pytest.approx(35.0)
     assert args.feature_weight_scale == pytest.approx(1.0)
     assert args.export_features is True
+    assert args.steps_per_epoch is None
+    assert args.total_steps is None
 
 
 def test_dataset_parser_defaults_to_mixed_sampling():
@@ -158,3 +160,22 @@ def test_dataset_parser_accepts_eval_and_export_interval_steps():
 
     assert args.eval_interval_steps == 2
     assert args.export_interval_steps == 3
+
+
+def test_dataset_parser_accepts_step_based_schedule_args():
+    from quad_mesh.generate_label import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--data_path",
+            "mesh.obj",
+            "--steps_per_epoch",
+            "4",
+            "--total_steps",
+            "10",
+        ]
+    )
+
+    assert args.steps_per_epoch == 4
+    assert args.total_steps == 10

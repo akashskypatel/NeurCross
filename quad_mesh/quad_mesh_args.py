@@ -100,6 +100,18 @@ def add_args(parser):
         help='number of training samples (batches) per epoch; this controls steps-per-epoch when batch_size=1; recommended value is 10000',
     )
     parser.add_argument(
+        '--steps_per_epoch',
+        type=int,
+        default=None,
+        help='optional explicit training steps per epoch; when set, overrides dataset-length scheduling',
+    )
+    parser.add_argument(
+        '--total_steps',
+        type=int,
+        default=None,
+        help='optional explicit total training steps; when set, training stops after this many global steps',
+    )
+    parser.add_argument(
         '--n_points',
         type=int,
         default=15000,

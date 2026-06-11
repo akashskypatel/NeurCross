@@ -338,6 +338,25 @@ def _copy_json_file(source_path: str, destination_path: str) -> str:
     return destination_path
 
 
+def _resolve_training_schedule(args) -> tuple[int, int, int]:
+    requested_steps_per_epoch = getattr(args, "steps_per_epoch", None)
+    requested_total_steps = getattr(args, "total_steps", None)
+
+    if requested_steps_per_epoch is not None and int(requested_steps_per_epoch) <= 0:
+        raise ValueError("--steps_per_epoch must be positive when provided")
+    if requested_total_steps is not None and int(requested_total_steps) <= 0:
+        raise ValueError("--total_steps must be positive when provided")
+
+    steps_per_epoch = int(requested_steps_per_epoch) if requested_steps_per_epoch is not None else int(args.n_samples)
+    if requested_total_steps is None:
+        num_epochs = int(args.num_epochs)
+        total_steps = steps_per_epoch * num_epochs
+    else:
+        total_steps = int(requested_total_steps)
+        num_epochs = max(1, (total_steps + steps_per_epoch - 1) // steps_per_epoch)
+    return steps_per_epoch, num_epochs, total_steps
+
+
 def _enforce_preflight_policy(preflight_report, policy: str):
     if preflight_report.status == "skip":
         return preflight_report
@@ -461,6 +480,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     MorseLoss = deps['MorseLoss']
     utils = deps['utils']
     dataset = deps['dataset']
+    steps_per_epoch_target, derived_num_epochs, total_steps = _resolve_training_schedule(args)
 
     mesh_dir, file_name, out_dir = _resolve_output_directory(args)
     run_started_utc = utc_timestamp()
@@ -587,7 +607,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         train_set = dataset.ReconDataset(
             training_mesh_path,
             args.n_points,
-            args.n_samples,
+            steps_per_epoch_target,
             args.grid_res,
             nonmnfld_sample_type=args.nonmnfld_sample_type,
             near_surface_ratio=args.near_surface_ratio,
@@ -630,15 +650,23 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         log_file.close()
         raise
     steps_per_epoch = len(train_dataloader)
-    total_steps = steps_per_epoch * args.num_epochs
+    if steps_per_epoch != steps_per_epoch_target:
+        raise RuntimeError(
+            "training schedule mismatch: expected steps_per_epoch={}, got {}".format(
+                steps_per_epoch_target,
+                steps_per_epoch,
+            )
+        )
     utils.log_string(
-        "Training schedule: n_samples_per_epoch={} n_points_per_batch={} batch_size={} "
-        "steps_per_epoch={} num_epochs={} total_steps={}".format(
+        "Training schedule: requested_n_samples={} derived_steps_per_epoch={} requested_num_epochs={} "
+        "derived_num_epochs={} requested_total_steps={} n_points_per_batch={} batch_size={} total_steps={}".format(
             args.n_samples,
-            args.n_points,
-            args.batch_size,
             steps_per_epoch,
             args.num_epochs,
+            derived_num_epochs,
+            getattr(args, "total_steps", None),
+            args.n_points,
+            args.batch_size,
             total_steps,
         ),
         log_file,
@@ -793,7 +821,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             epoch=epoch,
             batch_idx=batch_idx,
             global_step=next_global_step,
-            total_epochs=args.num_epochs,
+            total_epochs=derived_num_epochs,
             total_steps=total_steps,
             best_smooth_loss=float(best_smooth_loss),
             best_step=int(best_step),
@@ -812,10 +840,12 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         return save_checkpoint(checkpoint, checkpoint_dir, filename=filename)
 
     # For each epoch
-    for epoch in range(start_epoch, args.num_epochs):
+    for epoch in range(start_epoch, derived_num_epochs):
         if hasattr(train_set, "set_epoch"):
             train_set.set_epoch(epoch)
         for batch_idx, data in enumerate(train_dataloader):
+            if current_global_step >= total_steps:
+                break
             if epoch == start_epoch and start_batch_idx >= 0 and batch_idx <= start_batch_idx:
                 continue
             batch_start_time = time.perf_counter()
@@ -830,7 +860,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 or batch_idx == steps_per_epoch - 1
             ):
                 SAVE_BEST = True
-            is_final_batch = epoch == args.num_epochs - 1 and batch_idx == steps_per_epoch - 1
+            is_final_batch = next_global_step >= total_steps
 
             optimizer.zero_grad(set_to_none=True)
 
@@ -1061,6 +1091,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             criterion.update_morse_weight(global_step, total_steps,
                                           args.decay_params)  # assumes batch size of 1
         if stopped_early:
+            break
+        if current_global_step >= total_steps:
             break
 
     try:

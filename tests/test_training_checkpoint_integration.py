@@ -188,6 +188,39 @@ def test_early_stop_writes_checkpoint(tmp_path):
     assert final_checkpoint.metadata.global_step == 1
 
 
+def test_total_steps_overrides_large_num_epochs(tmp_path):
+    _require_cuda_torch()
+    import neurcross
+    from quad_mesh.checkpoint_utils import load_checkpoint
+
+    mesh_path = _cube_mesh_path()
+    if not os.path.exists(mesh_path):
+        pytest.skip("sample cube mesh is not available")
+
+    result = neurcross.train_crossfield(
+        data_path=mesh_path,
+        out_dir=str(tmp_path),
+        device="cuda",
+        num_epochs=99,
+        n_samples=7,
+        steps_per_epoch=1,
+        total_steps=2,
+        n_points=16,
+        batch_size=1,
+        num_workers=0,
+        persistent_workers=False,
+        log_interval=1,
+        save_checkpoint_interval=1,
+        keep_last_n_checkpoints=2,
+        fast_nondeterministic=True,
+    )
+    checkpoint = load_checkpoint(result.checkpoint_path)
+
+    assert checkpoint.metadata.global_step == 2
+    assert checkpoint.metadata.total_steps == 2
+    assert checkpoint.metadata.total_epochs == 2
+
+
 def test_generate_label_writes_manifest(tmp_path):
     _require_cuda_torch()
     import json
