@@ -330,7 +330,7 @@ class MorseLoss_quad_mesh(nn.Module):
 
     def forward(self, output_pred, mnfld_points, nonmnfld_points, mnfld_n_gt=None, near_points=None, batch_idx=0,
                 out_dir=None, filename=None, save_best=False, mnfld_pts_theta_output_pred=None, local_coord_u=None,
-                local_coord_v=None, is_final_export=False):
+                local_coord_v=None, is_final_export=False, collect_metrics=False):
 
         dims = mnfld_points.shape[-1]
 
@@ -453,7 +453,7 @@ class MorseLoss_quad_mesh(nn.Module):
 
         metrics = None
 
-        if save_best or is_final_export:
+        if save_best or is_final_export or collect_metrics:
             metrics = self._build_metrics(
                 loss,
                 sdf_term,
@@ -468,23 +468,24 @@ class MorseLoss_quad_mesh(nn.Module):
                 neighbors_term,
                 neighbor_mask,
             )
-            if self._export_manager is None:
+            if (save_best or is_final_export) and self._export_manager is None:
                 self._export_manager = CrossFieldExportManager(
                     out_dir,
                     filename,
                 )
-            export_crossfield_snapshot(
-                vector_alpha,
-                vector_beta,
-                out_dir=out_dir,
-                filename=filename,
-                batch_idx=batch_idx,
-                manager=self._export_manager,
-                total_loss=loss.detach().cpu().item(),
-                field_score=metrics["score"],
-                metrics=metrics,
-                is_final=is_final_export,
-            )
+            if save_best or is_final_export:
+                export_crossfield_snapshot(
+                    vector_alpha,
+                    vector_beta,
+                    out_dir=out_dir,
+                    filename=filename,
+                    batch_idx=batch_idx,
+                    manager=self._export_manager,
+                    total_loss=loss.detach().cpu().item(),
+                    field_score=metrics["score"],
+                    metrics=metrics,
+                    is_final=is_final_export,
+                )
 
 
         return {"loss": loss, 'sdf_term': sdf_term, 'inter_term': inter_term,

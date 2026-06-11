@@ -173,6 +173,7 @@ def build_manifest(
     runtime_info: dict[str, object] | None = None,
     sdf_samples_path: str | None = None,
     validation_samples_path: str | None = None,
+    validation_metrics_path: str | None = None,
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
 ) -> dict[str, object]:
@@ -207,6 +208,10 @@ def build_manifest(
     validation_samples_copy_path = _copy_or_keep(
         validation_samples_path,
         os.path.join(metrics_dir, "validation_samples.npz"),
+    )
+    validation_metrics_copy_path = _copy_or_keep(
+        validation_metrics_path,
+        os.path.join(metrics_dir, "validation_metrics.json"),
     )
     log_copy_path = _copy_required(log_path, os.path.join(logs_dir, "train.log"))
     command_txt_path = os.path.join(logs_dir, "command.txt")
@@ -296,7 +301,7 @@ def build_manifest(
         "quality": {
             **quality,
             "warnings": preflight_report.get("warnings", []),
-            "validation_metrics_json": None,
+            "validation_metrics_json": _rel(output_dir, validation_metrics_copy_path),
             "acceptance_report_json": _rel(output_dir, acceptance_report_path),
         },
     }
@@ -499,6 +504,7 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
         ("outputs", "validation_samples_npz"),
         ("outputs", "log_path"),
         ("outputs", "command_path"),
+        ("quality", "validation_metrics_json"),
         ("quality", "acceptance_report_json"),
     )
     for section_name, field_name in path_fields:
@@ -554,6 +560,7 @@ def package_dataset_sample(
     runtime_info: dict[str, object] | None = None,
     sdf_samples_path: str | None = None,
     validation_samples_path: str | None = None,
+    validation_metrics_path: str | None = None,
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
 ) -> str:
@@ -580,6 +587,7 @@ def package_dataset_sample(
         runtime_info=runtime_info,
         sdf_samples_path=sdf_samples_path,
         validation_samples_path=validation_samples_path,
+        validation_metrics_path=validation_metrics_path,
         export_geometry_npz=export_geometry_npz,
         quality_gate=quality_gate,
     )

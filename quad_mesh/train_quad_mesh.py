@@ -239,6 +239,86 @@ def _write_validation_batch_artifact(out_dir: str, validation_batch: dict) -> st
     return path
 
 
+def _write_validation_metrics_artifact(out_dir: str, metrics: dict) -> str:
+    metrics_dir = os.path.join(out_dir, "metrics")
+    os.makedirs(metrics_dir, exist_ok=True)
+    path = os.path.join(metrics_dir, "validation_metrics.json")
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(metrics, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    return path
+
+
+def _evaluate_validation_metrics(
+    *,
+    net,
+    criterion,
+    validation_batch: dict,
+    mnfld_points_base,
+    mnfld_n_gt,
+    local_coord_u,
+    local_coord_v,
+    angle_feature_static,
+    args,
+    device: str,
+    out_dir: str,
+    file_name: str,
+    global_step: int,
+):
+    torch = __import__("torch")
+    non_blocking = device == "cuda"
+    was_training = net.training
+    net.eval()
+    try:
+        mnfld_points = mnfld_points_base.detach().clone().requires_grad_()
+        nonmnfld_points = (
+            torch.from_numpy(validation_batch["nonmnfld_points"])
+            .unsqueeze(0)
+            .to(device, non_blocking=non_blocking)
+            .requires_grad_()
+        )
+        near_points = (
+            torch.from_numpy(validation_batch["near_points"])
+            .unsqueeze(0)
+            .to(device, non_blocking=non_blocking)
+            .requires_grad_()
+        )
+        features = torch.cat((mnfld_points, angle_feature_static), dim=-1)
+        output_pred, mnfld_pts_theta_output_pred = net(
+            nonmnfld_points,
+            mnfld_points,
+            near_points=near_points if args.morse_near else None,
+            angle_features=features,
+        )
+        loss_dict = criterion(
+            output_pred,
+            mnfld_points,
+            nonmnfld_points,
+            mnfld_n_gt,
+            near_points=near_points if args.morse_near else None,
+            batch_idx=global_step,
+            out_dir=out_dir,
+            filename=file_name,
+            save_best=False,
+            mnfld_pts_theta_output_pred=mnfld_pts_theta_output_pred,
+            local_coord_u=local_coord_u,
+            local_coord_v=local_coord_v,
+            is_final_export=False,
+            collect_metrics=True,
+        )
+        metrics = dict(loss_dict["metrics"] or {})
+        metrics["evaluation"] = {
+            "kind": "fixed_validation_batch",
+            "global_step": int(global_step),
+            "nonmnfld_sample_count": int(validation_batch["nonmnfld_points"].shape[0]),
+            "near_point_count": int(validation_batch["near_points"].shape[0]),
+        }
+        return metrics
+    finally:
+        if was_training:
+            net.train()
+
+
 def _enforce_preflight_policy(preflight_report, policy: str):
     if preflight_report.status == "skip":
         return preflight_report
@@ -366,6 +446,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     run_started_utc = utc_timestamp()
     manifest_path = None
     validation_samples_path = None
+    validation_metrics_path = None
     if args.checkpoint_dir is None:
         checkpoint_dir = os.path.join(out_dir, "checkpoints")
     elif os.path.isabs(args.checkpoint_dir):
@@ -956,6 +1037,22 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 uniform_extent=args.sdf_uniform_extent,
                 tsdf_truncation=args.tsdf_truncation,
             )
+        validation_metrics = _evaluate_validation_metrics(
+            net=net,
+            criterion=criterion,
+            validation_batch=validation_batch,
+            mnfld_points_base=mnfld_points_base,
+            mnfld_n_gt=mnfld_n_gt,
+            local_coord_u=local_coord_u,
+            local_coord_v=local_coord_v,
+            angle_feature_static=angle_feature_static,
+            args=args,
+            device=device,
+            out_dir=out_dir,
+            file_name=file_name,
+            global_step=max(next_global_step - 1, 0),
+        )
+        validation_metrics_path = _write_validation_metrics_artifact(out_dir, validation_metrics)
         if getattr(args, "dataset_root", None):
             from neurcross import __version__ as neurcross_version
 
@@ -988,6 +1085,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 runtime_info=runtime_info,
                 sdf_samples_path=sdf_samples_path,
                 validation_samples_path=validation_samples_path,
+                validation_metrics_path=validation_metrics_path,
                 export_geometry_npz=getattr(args, "export_geometry_npz", True),
                 quality_gate=getattr(args, "quality_gate", "default"),
             )

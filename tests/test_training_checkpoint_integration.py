@@ -250,6 +250,7 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["outputs"]["validation_samples_npz"] == "metrics/validation_samples.npz"
     assert manifest["outputs"]["command_path"] == "logs/command.txt"
     assert manifest["quality"]["acceptance_report_json"] == "metrics/acceptance_report.json"
+    assert manifest["quality"]["validation_metrics_json"] == "metrics/validation_metrics.json"
     assert manifest["quality"]["quality_gate"] == "default"
     assert manifest["training"]["python_version"]
     assert manifest["training"]["torch_version"]
@@ -260,6 +261,7 @@ def test_generate_label_writes_manifest(tmp_path):
     assert (dataset_root / "cube-sample" / "metrics" / "validation_samples.npz").exists()
     assert (dataset_root / "cube-sample" / "logs" / "command.txt").exists()
     assert (dataset_root / "cube-sample" / "metrics" / "acceptance_report.json").exists()
+    assert (dataset_root / "cube-sample" / "metrics" / "validation_metrics.json").exists()
     sdf = np.load(dataset_root / "cube-sample" / "sdf" / "sdf_samples.npz")
     assert "query_points" in sdf.files
     assert "sdf_values" in sdf.files
@@ -271,6 +273,12 @@ def test_generate_label_writes_manifest(tmp_path):
     assert "near_points" in validation.files
     assert "nonmnfld_sample_labels" in validation.files
     assert "validation_face_indices" in validation.files
+    validation_metrics = json.loads(
+        (dataset_root / "cube-sample" / "metrics" / "validation_metrics.json").read_text(encoding="utf-8")
+    )
+    assert "score" in validation_metrics
+    assert "field_validity" in validation_metrics
+    assert validation_metrics["evaluation"]["kind"] == "fixed_validation_batch"
 
 
 def test_generate_label_quarantines_low_quality(tmp_path, monkeypatch):
