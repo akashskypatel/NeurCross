@@ -117,6 +117,10 @@ def test_dataset_parser_accepts_new_sampling_controls():
     assert args.save_best_by == "val_field_score"
     assert args.eval_interval_steps == 0
     assert args.export_interval_steps == 500
+    assert args.feature_mode == "auto"
+    assert args.feature_angle_threshold == pytest.approx(35.0)
+    assert args.feature_weight_scale == pytest.approx(1.0)
+    assert args.export_features is True
 
 
 def test_dataset_parser_defaults_to_mixed_sampling():

@@ -254,6 +254,10 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["outputs"]["geometry_npz"] is None
     assert manifest["outputs"]["sdf_samples_npz"] == "sdf/sdf_samples.npz"
     assert manifest["outputs"]["validation_samples_npz"] == "metrics/validation_samples.npz"
+    assert manifest["outputs"]["sharp_edges_npy"] == "features/sharp_edges.npy"
+    assert manifest["outputs"]["feature_vertices_npy"] == "features/feature_vertices.npy"
+    assert manifest["outputs"]["feature_lines_json"] == "features/feature_lines.json"
+    assert manifest["outputs"]["face_feature_distance_npy"] == "features/face_feature_distance.npy"
     assert manifest["outputs"]["command_path"] == "logs/command.txt"
     assert manifest["quality"]["acceptance_report_json"] == "metrics/acceptance_report.json"
     assert manifest["quality"]["validation_metrics_json"] == "metrics/validation_metrics.json"
@@ -265,8 +269,14 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["training"]["cuda_version"]
     assert manifest["training"]["platform"]
     assert manifest["training"]["args"]["save_best_by"] == "val_field_score"
+    assert manifest["features"]["feature_mode"] == "auto"
+    assert manifest["features"]["feature_constrained"] is True
     assert not (sample_dir / "geometry" / "mesh_geometry.npz").exists()
     assert (sample_dir / "sdf" / "sdf_samples.npz").exists()
+    assert (sample_dir / "features" / "sharp_edges.npy").exists()
+    assert (sample_dir / "features" / "feature_vertices.npy").exists()
+    assert (sample_dir / "features" / "feature_lines.json").exists()
+    assert (sample_dir / "features" / "face_feature_distance.npy").exists()
     assert (sample_dir / "metrics" / "validation_samples.npz").exists()
     assert (sample_dir / "logs" / "command.txt").exists()
     assert (sample_dir / "metrics" / "acceptance_report.json").exists()
@@ -294,6 +304,8 @@ def test_generate_label_writes_manifest(tmp_path):
     )
     assert len(validation_history) >= 2
     assert all("score" in item for item in validation_history)
+    sharp_edges = np.load(sample_dir / "features" / "sharp_edges.npy")
+    assert sharp_edges.shape[1] == 2
 
 
 def test_generate_label_quarantines_low_quality(tmp_path, monkeypatch):

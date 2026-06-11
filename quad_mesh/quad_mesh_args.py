@@ -61,6 +61,30 @@ def add_args(parser):
         default='default',
         help='quality acceptance profile recorded and applied during dataset packaging',
     )
+    parser.add_argument(
+        '--feature_mode',
+        choices=('none', 'auto', 'file'),
+        default='auto',
+        help='feature artifact export mode for dataset-label runs',
+    )
+    parser.add_argument(
+        '--feature_angle_threshold',
+        type=float,
+        default=35.0,
+        help='dihedral angle threshold in degrees used to detect sharp feature edges',
+    )
+    parser.add_argument(
+        '--feature_weight_scale',
+        type=float,
+        default=1.0,
+        help='feature weighting scale recorded in the manifest for downstream consumers',
+    )
+    parser.add_argument(
+        '--export_features',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='export feature-line artifacts for dataset-label runs',
+    )
     parser.add_argument('--model_name', type=str, default='model', help='trained model name')
     parser.add_argument('--seed', type=int, default=3627473, help='random seed')
     parser.add_argument(

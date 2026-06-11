@@ -149,6 +149,7 @@ def build_manifest(
     validation_samples_path: str | None = None,
     validation_metrics_path: str | None = None,
     validation_history_path: str | None = None,
+    feature_artifacts: dict[str, object] | None = None,
     selected_label: str = "best",
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
@@ -193,6 +194,24 @@ def build_manifest(
     validation_history_copy_path = _copy_or_keep(
         validation_history_path,
         os.path.join(metrics_dir, "validation_history.json"),
+    )
+    feature_artifacts = feature_artifacts or {}
+    features_dir = os.path.join(output_dir, "features")
+    sharp_edges_copy_path = _copy_or_keep(
+        feature_artifacts.get("sharp_edges_path"),
+        os.path.join(features_dir, "sharp_edges.npy"),
+    )
+    feature_vertices_copy_path = _copy_or_keep(
+        feature_artifacts.get("feature_vertices_path"),
+        os.path.join(features_dir, "feature_vertices.npy"),
+    )
+    feature_lines_copy_path = _copy_or_keep(
+        feature_artifacts.get("feature_lines_path"),
+        os.path.join(features_dir, "feature_lines.json"),
+    )
+    face_feature_distance_copy_path = _copy_or_keep(
+        feature_artifacts.get("face_feature_distance_path"),
+        os.path.join(features_dir, "face_feature_distance.npy"),
     )
     log_copy_path = _copy_required(log_path, os.path.join(logs_dir, "train.log"))
     command_txt_path = os.path.join(logs_dir, "command.txt")
@@ -249,6 +268,14 @@ def build_manifest(
             "normalized_bounds_min": normalization.get("bounds_after_min"),
             "normalized_bounds_max": normalization.get("bounds_after_max"),
         },
+        "features": {
+            "feature_mode": args_dict.get("feature_mode", "auto"),
+            "feature_angle_threshold": float(args_dict.get("feature_angle_threshold", 35.0)),
+            "feature_weight_scale": float(args_dict.get("feature_weight_scale", 1.0)),
+            "feature_constrained": bool(feature_artifacts.get("feature_constrained", False)),
+            "feature_edge_count": int(feature_artifacts.get("feature_edge_count", 0)),
+            "feature_vertex_count": int(feature_artifacts.get("feature_vertex_count", 0)),
+        },
         "training": {
             "tool": "neurcross",
             "neurcross_version": neurcross_version,
@@ -276,6 +303,10 @@ def build_manifest(
             "geometry_npz": _rel(output_dir, geometry_npz_path),
             "sdf_samples_npz": _rel(output_dir, sdf_samples_path),
             "validation_samples_npz": _rel(output_dir, validation_samples_copy_path),
+            "sharp_edges_npy": _rel(output_dir, sharp_edges_copy_path),
+            "feature_vertices_npy": _rel(output_dir, feature_vertices_copy_path),
+            "feature_lines_json": _rel(output_dir, feature_lines_copy_path),
+            "face_feature_distance_npy": _rel(output_dir, face_feature_distance_copy_path),
             "log_path": _rel(output_dir, log_copy_path),
             "command_path": _rel(output_dir, command_txt_path),
         },
@@ -406,6 +437,14 @@ def build_skipped_manifest(
             "normalized_bounds_min": normalization.get("bounds_after_min"),
             "normalized_bounds_max": normalization.get("bounds_after_max"),
         },
+        "features": {
+            "feature_mode": args_dict.get("feature_mode", "auto"),
+            "feature_angle_threshold": float(args_dict.get("feature_angle_threshold", 35.0)),
+            "feature_weight_scale": float(args_dict.get("feature_weight_scale", 1.0)),
+            "feature_constrained": False,
+            "feature_edge_count": 0,
+            "feature_vertex_count": 0,
+        },
         "training": {
             "tool": "neurcross",
             "neurcross_version": neurcross_version,
@@ -433,6 +472,10 @@ def build_skipped_manifest(
             "geometry_npz": None,
             "sdf_samples_npz": None,
             "validation_samples_npz": None,
+            "sharp_edges_npy": None,
+            "feature_vertices_npy": None,
+            "feature_lines_json": None,
+            "face_feature_distance_npy": None,
             "log_path": _rel(output_dir, log_copy_path),
             "command_path": _rel(output_dir, command_txt_path),
         },
@@ -491,6 +534,10 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
         ("outputs", "metrics_best_json"),
         ("outputs", "geometry_npz"),
         ("outputs", "validation_samples_npz"),
+        ("outputs", "sharp_edges_npy"),
+        ("outputs", "feature_vertices_npy"),
+        ("outputs", "feature_lines_json"),
+        ("outputs", "face_feature_distance_npy"),
         ("outputs", "log_path"),
         ("outputs", "command_path"),
         ("quality", "validation_metrics_json"),
@@ -552,6 +599,7 @@ def package_dataset_sample(
     validation_samples_path: str | None = None,
     validation_metrics_path: str | None = None,
     validation_history_path: str | None = None,
+    feature_artifacts: dict[str, object] | None = None,
     selected_label: str = "best",
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
@@ -581,6 +629,7 @@ def package_dataset_sample(
         validation_samples_path=validation_samples_path,
         validation_metrics_path=validation_metrics_path,
         validation_history_path=validation_history_path,
+        feature_artifacts=feature_artifacts,
         selected_label=selected_label,
         export_geometry_npz=export_geometry_npz,
         quality_gate=quality_gate,

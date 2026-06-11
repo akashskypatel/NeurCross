@@ -441,6 +441,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         package_failed_dataset_sample,
         package_skipped_dataset_sample,
     )
+    from .feature_artifacts import export_feature_artifacts
     from .sdf_samples import export_sdf_samples
 
     # get training parameters
@@ -467,6 +468,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     validation_samples_path = None
     validation_metrics_path = None
     validation_history_path = None
+    feature_artifacts = None
     selected_label = "best"
     validation_history = []
     if args.checkpoint_dir is None:
@@ -555,6 +557,13 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             "normalized_mesh_obj": normalized_export.obj_path,
             "normalized_mesh_ply": normalized_export.ply_path,
         }
+        if getattr(args, "export_features", True):
+            feature_artifacts = export_feature_artifacts(
+                mesh=normalized_export.mesh,
+                output_dir=os.path.join(out_dir, "features"),
+                feature_mode=getattr(args, "feature_mode", "auto"),
+                angle_threshold_degrees=getattr(args, "feature_angle_threshold", 35.0),
+            )
         preflight_report.normalization = normalized_export.metadata.to_dict()
         with open(mesh_report_path, "w", encoding="utf-8") as handle:
             json.dump(preflight_report.to_dict(), handle, indent=2, sort_keys=True)
@@ -1197,6 +1206,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 validation_samples_path=validation_samples_path,
                 validation_metrics_path=validation_metrics_path,
                 validation_history_path=validation_history_path,
+                feature_artifacts=feature_artifacts,
                 selected_label=selected_label,
                 export_geometry_npz=getattr(args, "export_geometry_npz", True),
                 quality_gate=getattr(args, "quality_gate", "default"),
