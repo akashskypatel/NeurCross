@@ -124,7 +124,9 @@ def build_manifest(
     training_command: str,
     stopped_early: bool,
     stop_summary: dict | None,
+    runtime_info: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    runtime_info = runtime_info or {}
     source_mesh_name = os.path.basename(source_mesh_path)
     source_copy_path = os.path.join(output_dir, "input", source_mesh_name)
     normalized_mesh_copy = os.path.join(output_dir, "input", "normalized_mesh.ply")
@@ -213,10 +215,11 @@ def build_manifest(
             "started_at_utc": started_at_utc,
             "finished_at_utc": finished_at_utc,
             "elapsed_seconds": float(elapsed_seconds),
-            "git_commit": None,
-            "python_version": None,
-            "torch_version": None,
-            "cuda_version": None,
+            "git_commit": runtime_info.get("git_commit"),
+            "python_version": runtime_info.get("python_version"),
+            "torch_version": runtime_info.get("torch_version"),
+            "cuda_version": runtime_info.get("cuda_version"),
+            "platform": runtime_info.get("platform"),
             "stopped_early": bool(stopped_early),
             "stop_summary": stop_summary,
         },
@@ -339,6 +342,7 @@ def package_dataset_sample(
     training_command: str,
     stopped_early: bool,
     stop_summary: dict | None,
+    runtime_info: dict[str, object] | None = None,
 ) -> str:
     created_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     manifest = build_manifest(
@@ -360,5 +364,6 @@ def package_dataset_sample(
         training_command=training_command,
         stopped_early=stopped_early,
         stop_summary=stop_summary,
+        runtime_info=runtime_info,
     )
     return write_manifest(manifest, output_dir)

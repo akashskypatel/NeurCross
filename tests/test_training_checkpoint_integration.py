@@ -237,6 +237,10 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["outputs"]["crossfield_best_rawfield"] == "fields/crossfield_best.rawfield"
     assert manifest["outputs"]["geometry_npz"] == "geometry/mesh_geometry.npz"
     assert manifest["outputs"]["command_path"] == "logs/command.txt"
+    assert manifest["training"]["python_version"]
+    assert manifest["training"]["torch_version"]
+    assert manifest["training"]["cuda_version"]
+    assert manifest["training"]["platform"]
     assert (dataset_root / "cube-sample" / "fields" / "crossfield_best.rawfield").exists()
     assert (dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz").exists()
     assert (dataset_root / "cube-sample" / "logs" / "command.txt").exists()

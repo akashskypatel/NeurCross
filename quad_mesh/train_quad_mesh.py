@@ -1,5 +1,6 @@
 import json
 import os
+import platform
 import sys
 import time
 import warnings
@@ -726,6 +727,13 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             command_name,
             " ".join(argv or []),
         ).strip()
+        runtime_info = {
+            "git_commit": None,
+            "python_version": sys.version.split()[0],
+            "torch_version": getattr(torch, "__version__", None),
+            "cuda_version": getattr(getattr(torch, "version", None), "cuda", None),
+            "platform": platform.platform(),
+        }
         manifest_path = package_dataset_sample(
             output_dir=out_dir,
             sample_id=args.sample_id,
@@ -744,6 +752,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             training_command=training_command,
             stopped_early=stopped_early,
             stop_summary=stop_summary,
+            runtime_info=runtime_info,
         )
     return TrainingResult(
         args=args,
