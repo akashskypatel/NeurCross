@@ -184,6 +184,36 @@ def add_args(parser):
         help='export cross-field snapshots every N training steps in addition to the final export',
     )
     parser.add_argument(
+        '--curriculum',
+        choices=('none', 'default', 'cad', 'organic'),
+        default='none',
+        help='optional curriculum schedule for staged loss-weight emphasis',
+    )
+    parser.add_argument(
+        '--schedule_unit',
+        choices=('step',),
+        default='step',
+        help='unit used for curriculum scheduling',
+    )
+    parser.add_argument(
+        '--geometry_stage_ratio',
+        type=float,
+        default=0.2,
+        help='fraction of total steps allocated to geometry stabilization',
+    )
+    parser.add_argument(
+        '--alignment_stage_ratio',
+        type=float,
+        default=0.6,
+        help='fraction of total steps allocated to field alignment',
+    )
+    parser.add_argument(
+        '--smooth_stage_ratio',
+        type=float,
+        default=0.2,
+        help='fraction of total steps allocated to smoothness cleanup',
+    )
+    parser.add_argument(
         '--keep_last_n_checkpoints',
         type=int,
         default=3,

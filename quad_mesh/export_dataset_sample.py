@@ -124,6 +124,23 @@ def _selected_source_suffix(selected_label: str) -> str:
     return selected_label
 
 
+def _build_curriculum_manifest_entry(
+    args_dict: dict[str, object],
+    curriculum_state: dict[str, object] | None = None,
+) -> dict[str, object]:
+    curriculum_state = curriculum_state or {}
+    return {
+        "mode": args_dict.get("curriculum", "none"),
+        "schedule_unit": args_dict.get("schedule_unit", "step"),
+        "geometry_stage_ratio": float(args_dict.get("geometry_stage_ratio", 0.2)),
+        "alignment_stage_ratio": float(args_dict.get("alignment_stage_ratio", 0.6)),
+        "smooth_stage_ratio": float(args_dict.get("smooth_stage_ratio", 0.2)),
+        "final_stage": curriculum_state.get("stage_name"),
+        "final_stage_index": curriculum_state.get("stage_index"),
+        "stage_bounds": curriculum_state.get("stage_bounds"),
+    }
+
+
 def build_manifest(
     *,
     output_dir: str,
@@ -153,6 +170,7 @@ def build_manifest(
     selected_label: str = "best",
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
+    curriculum_state: dict[str, object] | None = None,
 ) -> dict[str, object]:
     runtime_info = runtime_info or {}
     source_mesh_name = os.path.basename(source_mesh_path)
@@ -281,6 +299,7 @@ def build_manifest(
             "neurcross_version": neurcross_version,
             "command": training_command,
             "args": args_dict,
+            "curriculum": _build_curriculum_manifest_entry(args_dict, curriculum_state),
             "seed": args_dict["seed"],
             "device": device,
             "started_at_utc": started_at_utc,
@@ -450,6 +469,7 @@ def build_skipped_manifest(
             "neurcross_version": neurcross_version,
             "command": training_command,
             "args": args_dict,
+            "curriculum": _build_curriculum_manifest_entry(args_dict),
             "seed": args_dict["seed"],
             "device": device,
             "started_at_utc": started_at_utc,
@@ -513,7 +533,7 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
         "source": ("source_mesh_path", "source_mesh_sha256", "source_format"),
         "mesh": ("vertex_count", "face_count", "is_watertight"),
         "normalization": ("coordinate_space", "target_bounds", "center", "scale"),
-        "training": ("tool", "neurcross_version", "command", "args", "seed", "device", "started_at_utc", "finished_at_utc", "elapsed_seconds"),
+        "training": ("tool", "neurcross_version", "command", "args", "curriculum", "seed", "device", "started_at_utc", "finished_at_utc", "elapsed_seconds"),
         "outputs": ("selected_label",),
         "quality": ("accepted", "quality_grade", "quality_gate", "field_score", "failure_reason"),
     }
@@ -603,6 +623,7 @@ def package_dataset_sample(
     selected_label: str = "best",
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
+    curriculum_state: dict[str, object] | None = None,
 ) -> str:
     created_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     manifest = build_manifest(
@@ -633,6 +654,7 @@ def package_dataset_sample(
         selected_label=selected_label,
         export_geometry_npz=export_geometry_npz,
         quality_gate=quality_gate,
+        curriculum_state=curriculum_state,
     )
     return write_manifest(manifest, output_dir)
 

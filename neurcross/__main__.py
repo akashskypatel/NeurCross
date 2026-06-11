@@ -26,16 +26,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
 
+    build_index = subparsers.add_parser(
+        "build-dataset-index",
+        help="Scan generated dataset samples and write a dataset index.",
+    )
+    build_index.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+
+    split_dataset = subparsers.add_parser(
+        "split-dataset",
+        help="Build deterministic shape-level dataset splits from accepted samples.",
+    )
+    split_dataset.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+
     parser.epilog = (
         "High-level functionality:\n"
         "  train-quad-mesh     Train NeurCross on a mesh to produce cross-field snapshots.\n"
         "  train               Alias for train-quad-mesh.\n"
-        "  generate-label      Generate a dataset sample package from one mesh.\n\n"
+        "  generate-label      Generate a dataset sample package from one mesh.\n"
+        "  build-dataset-index Scan generated dataset samples and write an index.\n"
+        "  split-dataset       Build deterministic shape-level dataset splits.\n\n"
         "Examples:\n"
         "  python -m neurcross --help\n"
         "  python -m neurcross train-quad-mesh --help\n"
         "  python -m neurcross train --help\n"
-        "  python -m neurcross generate-label --help"
+        "  python -m neurcross generate-label --help\n"
+        "  python -m neurcross build-dataset-index --help\n"
+        "  python -m neurcross split-dataset --help"
     )
     return parser
 
@@ -61,6 +77,20 @@ def main() -> None:
 
         sys.argv = ["neurcross-generate-label", *command_args]
         generate_label_main(command_args)
+        return
+
+    if command == "build-dataset-index":
+        from quad_mesh.dataset_splits import build_dataset_index_main
+
+        sys.argv = ["neurcross-build-dataset-index", *command_args]
+        build_dataset_index_main(command_args)
+        return
+
+    if command == "split-dataset":
+        from quad_mesh.dataset_splits import split_dataset_main
+
+        sys.argv = ["neurcross-split-dataset", *command_args]
+        split_dataset_main(command_args)
         return
 
     parser.error(f"unknown command: {command}")

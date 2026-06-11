@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import trimesh
+from types import SimpleNamespace
 
 
 def _write_box_mesh(tmp_path, name="box.obj"):
@@ -123,6 +124,11 @@ def test_dataset_parser_accepts_new_sampling_controls():
     assert args.export_features is True
     assert args.steps_per_epoch is None
     assert args.total_steps is None
+    assert args.curriculum == "none"
+    assert args.schedule_unit == "step"
+    assert args.geometry_stage_ratio == pytest.approx(0.2)
+    assert args.alignment_stage_ratio == pytest.approx(0.6)
+    assert args.smooth_stage_ratio == pytest.approx(0.2)
 
 
 def test_dataset_parser_defaults_to_mixed_sampling():
@@ -179,3 +185,69 @@ def test_dataset_parser_accepts_step_based_schedule_args():
 
     assert args.steps_per_epoch == 4
     assert args.total_steps == 10
+
+
+def test_dataset_parser_accepts_curriculum_controls():
+    from quad_mesh.generate_label import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--data_path",
+            "mesh.obj",
+            "--curriculum",
+            "cad",
+            "--schedule_unit",
+            "step",
+            "--geometry_stage_ratio",
+            "0.3",
+            "--alignment_stage_ratio",
+            "0.5",
+            "--smooth_stage_ratio",
+            "0.2",
+        ]
+    )
+
+    assert args.curriculum == "cad"
+    assert args.schedule_unit == "step"
+    assert args.geometry_stage_ratio == pytest.approx(0.3)
+    assert args.alignment_stage_ratio == pytest.approx(0.5)
+    assert args.smooth_stage_ratio == pytest.approx(0.2)
+
+
+def test_curriculum_state_is_disabled_by_default():
+    from quad_mesh.train_quad_mesh import _build_curriculum_state
+
+    args = SimpleNamespace(
+        curriculum="none",
+        schedule_unit="step",
+        geometry_stage_ratio=0.2,
+        alignment_stage_ratio=0.6,
+        smooth_stage_ratio=0.2,
+    )
+    state = _build_curriculum_state(args, global_step=0, total_steps=10, base_weights=[1.0, 2.0, 3.0, 4.0, 5.0])
+
+    assert state["enabled"] is False
+    assert state["stage_name"] == "geometry"
+    assert state["active_weights"] == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0])
+
+
+def test_curriculum_stage_boundaries_use_global_steps():
+    from quad_mesh.train_quad_mesh import _build_curriculum_state
+
+    args = SimpleNamespace(
+        curriculum="default",
+        schedule_unit="step",
+        geometry_stage_ratio=0.2,
+        alignment_stage_ratio=0.6,
+        smooth_stage_ratio=0.2,
+    )
+
+    geometry = _build_curriculum_state(args, global_step=1, total_steps=10, base_weights=[1.0, 1.0, 1.0, 1.0, 1.0])
+    alignment = _build_curriculum_state(args, global_step=2, total_steps=10, base_weights=[1.0, 1.0, 1.0, 1.0, 1.0])
+    smooth = _build_curriculum_state(args, global_step=8, total_steps=10, base_weights=[1.0, 1.0, 1.0, 1.0, 1.0])
+
+    assert geometry["stage_name"] == "geometry"
+    assert alignment["stage_name"] == "alignment"
+    assert smooth["stage_name"] == "smooth"
+    assert alignment["active_weights"] != pytest.approx([1.0, 1.0, 1.0, 1.0, 1.0])

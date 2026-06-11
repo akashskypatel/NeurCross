@@ -357,6 +357,87 @@ def _resolve_training_schedule(args) -> tuple[int, int, int]:
     return steps_per_epoch, num_epochs, total_steps
 
 
+_CURRICULUM_STAGE_ORDER = ("geometry", "alignment", "smooth")
+_CURRICULUM_STAGE_MULTIPLIERS = {
+    "default": {
+        "geometry": (1.25, 1.25, 0.65, 1.10, 0.60),
+        "alignment": (1.00, 1.00, 1.10, 1.00, 1.00),
+        "smooth": (0.85, 0.85, 1.20, 0.90, 1.35),
+    },
+    "cad": {
+        "geometry": (1.20, 1.20, 0.70, 1.10, 0.55),
+        "alignment": (1.00, 1.00, 1.20, 1.00, 0.95),
+        "smooth": (0.80, 0.80, 1.30, 0.90, 1.45),
+    },
+    "organic": {
+        "geometry": (1.15, 1.15, 0.75, 1.05, 0.65),
+        "alignment": (1.00, 1.00, 1.05, 1.00, 1.00),
+        "smooth": (0.90, 0.90, 1.10, 0.95, 1.30),
+    },
+}
+
+
+def _build_curriculum_state(args, *, global_step: int, total_steps: int, base_weights) -> dict[str, object]:
+    mode = getattr(args, "curriculum", "none")
+    ratios = {
+        "geometry": float(getattr(args, "geometry_stage_ratio", 0.2)),
+        "alignment": float(getattr(args, "alignment_stage_ratio", 0.6)),
+        "smooth": float(getattr(args, "smooth_stage_ratio", 0.2)),
+    }
+    if any(value < 0.0 for value in ratios.values()):
+        raise ValueError("curriculum stage ratios must be non-negative")
+    ratio_sum = sum(ratios.values())
+    if ratio_sum <= 0.0:
+        raise ValueError("curriculum stage ratios must sum to a positive value")
+
+    normalized_ratios = {name: value / ratio_sum for name, value in ratios.items()}
+    total_steps = max(int(total_steps), 1)
+    progress = min(max(int(global_step), 0), total_steps - 1) / float(total_steps)
+
+    cumulative = 0.0
+    stage_bounds = {}
+    stage_name = "smooth"
+    stage_index = len(_CURRICULUM_STAGE_ORDER) - 1
+    for index, name in enumerate(_CURRICULUM_STAGE_ORDER):
+        start = cumulative
+        cumulative += normalized_ratios[name]
+        end = cumulative if index < len(_CURRICULUM_STAGE_ORDER) - 1 else 1.0
+        stage_bounds[name] = {"start_ratio": start, "end_ratio": end}
+        if progress < end or index == len(_CURRICULUM_STAGE_ORDER) - 1:
+            stage_name = name
+            stage_index = index
+            break
+
+    base_weight_list = [float(value) for value in base_weights]
+    if mode == "none":
+        active_weights = list(base_weight_list)
+    else:
+        multipliers = _CURRICULUM_STAGE_MULTIPLIERS[mode][stage_name]
+        active_weights = [
+            base_weight_list[idx] * multipliers[idx]
+            for idx in range(min(len(base_weight_list), len(multipliers)))
+        ]
+
+    return {
+        "mode": mode,
+        "schedule_unit": getattr(args, "schedule_unit", "step"),
+        "stage_name": stage_name,
+        "stage_index": stage_index,
+        "stage_bounds": stage_bounds,
+        "normalized_ratios": normalized_ratios,
+        "active_weights": active_weights,
+        "enabled": mode != "none",
+    }
+
+
+def _apply_curriculum_weights(criterion, *, base_weights, curriculum_state: dict[str, object]) -> None:
+    criterion.weights = list(criterion.weights)
+    active_weights = curriculum_state["active_weights"]
+    limit = min(len(active_weights), len(criterion.weights))
+    for idx in range(limit):
+        criterion.weights[idx] = float(active_weights[idx])
+
+
 def _enforce_preflight_policy(preflight_report, policy: str):
     if preflight_report.status == "skip":
         return preflight_report
@@ -491,6 +572,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     feature_artifacts = None
     selected_label = "best"
     validation_history = []
+    curriculum_state = None
+    last_logged_curriculum_stage = None
     if args.checkpoint_dir is None:
         checkpoint_dir = os.path.join(out_dir, "checkpoints")
     elif os.path.isabs(args.checkpoint_dir):
@@ -755,7 +838,26 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                               )
     except torch.cuda.OutOfMemoryError as exc:
         _raise_cuda_oom_guidance(exc, context="topology cache setup")
+    criterion_base_weights = [float(value) for value in criterion.weights[:5]]
     from models.loss_quad_mesh import export_crossfield_snapshot
+    curriculum_state = _build_curriculum_state(
+        args,
+        global_step=0,
+        total_steps=total_steps,
+        base_weights=criterion_base_weights,
+    )
+    if curriculum_state["enabled"]:
+        utils.log_string(
+            "Curriculum enabled: mode={} schedule_unit={} stage_ratios={} initial_stage={}".format(
+                curriculum_state["mode"],
+                curriculum_state["schedule_unit"],
+                curriculum_state["normalized_ratios"],
+                curriculum_state["stage_name"],
+            ),
+            log_file,
+        )
+    else:
+        utils.log_string("Curriculum disabled; using base loss weights.", log_file)
 
     early_stopper = None
     loss_history = []
@@ -854,6 +956,27 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             last_batch_idx = batch_idx
             next_global_step = global_step + 1
             current_global_step = next_global_step
+            curriculum_state = _build_curriculum_state(
+                args,
+                global_step=global_step,
+                total_steps=total_steps,
+                base_weights=criterion_base_weights,
+            )
+            _apply_curriculum_weights(
+                criterion,
+                base_weights=criterion_base_weights,
+                curriculum_state=curriculum_state,
+            )
+            if curriculum_state["stage_name"] != last_logged_curriculum_stage:
+                utils.log_string(
+                    "Curriculum stage: global_step={} stage={} weights={}".format(
+                        global_step,
+                        curriculum_state["stage_name"],
+                        curriculum_state["active_weights"],
+                    ),
+                    log_file,
+                )
+                last_logged_curriculum_stage = curriculum_state["stage_name"]
             export_interval_steps = max(int(getattr(args, "export_interval_steps", 500)), 0)
             if batch_idx != 0 and (
                 (export_interval_steps > 0 and global_step > 0 and global_step % export_interval_steps == 0)
@@ -1242,6 +1365,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 selected_label=selected_label,
                 export_geometry_npz=getattr(args, "export_geometry_npz", True),
                 quality_gate=getattr(args, "quality_gate", "default"),
+                curriculum_state=curriculum_state,
             )
             with open(manifest_path, "r", encoding="utf-8") as handle:
                 manifest = json.load(handle)

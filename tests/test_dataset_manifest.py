@@ -1,6 +1,8 @@
 import json
 import os
 
+import pytest
+
 
 def test_validate_manifest_accepts_minimum_schema(tmp_path):
     from quad_mesh.export_dataset_sample import validate_manifest, write_manifest
@@ -67,6 +69,16 @@ def test_validate_manifest_accepts_minimum_schema(tmp_path):
             "neurcross_version": "0.1.0",
             "command": "python -m neurcross generate-label",
             "args": {},
+            "curriculum": {
+                "mode": "none",
+                "schedule_unit": "step",
+                "geometry_stage_ratio": 0.2,
+                "alignment_stage_ratio": 0.6,
+                "smooth_stage_ratio": 0.2,
+                "final_stage": None,
+                "final_stage_index": None,
+                "stage_bounds": None,
+            },
             "seed": 1,
             "device": "cuda",
             "started_at_utc": "2026-06-11T00:00:00Z",
@@ -180,6 +192,16 @@ def test_validate_manifest_rejects_crossfield_row_count_mismatch(tmp_path):
             "neurcross_version": "0.1.0",
             "command": "python -m neurcross generate-label",
             "args": {},
+            "curriculum": {
+                "mode": "none",
+                "schedule_unit": "step",
+                "geometry_stage_ratio": 0.2,
+                "alignment_stage_ratio": 0.6,
+                "smooth_stage_ratio": 0.2,
+                "final_stage": None,
+                "final_stage_index": None,
+                "stage_bounds": None,
+            },
             "seed": 1,
             "device": "cuda",
             "started_at_utc": "2026-06-11T00:00:00Z",
@@ -268,6 +290,16 @@ def test_validate_manifest_allows_missing_optional_geometry_path(tmp_path):
             "neurcross_version": "0.1.0",
             "command": "python -m neurcross generate-label",
             "args": {},
+            "curriculum": {
+                "mode": "none",
+                "schedule_unit": "step",
+                "geometry_stage_ratio": 0.2,
+                "alignment_stage_ratio": 0.6,
+                "smooth_stage_ratio": 0.2,
+                "final_stage": None,
+                "final_stage_index": None,
+                "stage_bounds": None,
+            },
             "seed": 1,
             "device": "cuda",
             "started_at_utc": "2026-06-11T00:00:00Z",
@@ -343,6 +375,16 @@ def test_validate_manifest_accepts_skipped_sample(tmp_path):
             "neurcross_version": "0.1.0",
             "command": "python -m neurcross generate-label",
             "args": {},
+            "curriculum": {
+                "mode": "none",
+                "schedule_unit": "step",
+                "geometry_stage_ratio": 0.2,
+                "alignment_stage_ratio": 0.6,
+                "smooth_stage_ratio": 0.2,
+                "final_stage": None,
+                "final_stage_index": None,
+                "stage_bounds": None,
+            },
             "seed": 1,
             "device": "cpu",
             "started_at_utc": "2026-06-11T00:00:00Z",
@@ -366,3 +408,33 @@ def test_validate_manifest_accepts_skipped_sample(tmp_path):
     }
 
     validate_manifest(manifest, str(tmp_path))
+
+
+def test_validate_manifest_requires_curriculum_section(tmp_path):
+    from quad_mesh.export_dataset_sample import validate_manifest
+
+    manifest = {
+        "neurcross_dataset_schema_version": "0.1",
+        "artifact_type": "neurcross_per_mesh_label",
+        "sample_id": "sample-001",
+        "created_at_utc": "2026-06-11T00:00:00Z",
+        "source": {"source_mesh_path": "input/original_mesh.obj", "source_mesh_sha256": "x", "source_format": "obj"},
+        "mesh": {"vertex_count": 3, "face_count": 1, "is_watertight": False},
+        "normalization": {"coordinate_space": "normalized", "target_bounds": "[-0.5, 0.5]^3", "center": [0, 0, 0], "scale": 1.0},
+        "training": {
+            "tool": "neurcross",
+            "neurcross_version": "0.1.0",
+            "command": "python -m neurcross generate-label",
+            "args": {},
+            "seed": 1,
+            "device": "cuda",
+            "started_at_utc": "2026-06-11T00:00:00Z",
+            "finished_at_utc": "2026-06-11T00:00:01Z",
+            "elapsed_seconds": 1.0,
+        },
+        "outputs": {"selected_label": "best"},
+        "quality": {"accepted": True, "quality_grade": "A", "quality_gate": "default_v0", "field_score": 0.1, "failure_reason": None},
+    }
+
+    with pytest.raises(ValueError, match="curriculum"):
+        validate_manifest(manifest, str(tmp_path))
