@@ -403,3 +403,151 @@ def test_generate_label_captures_training_step_failure(tmp_path, monkeypatch):
     assert manifest["sample_state"] == "failed"
     assert manifest["quality"]["accepted"] is False
     assert "forced-step-failure" in manifest["quality"]["failure_reason"]
+
+
+def test_generate_label_val_field_score_can_select_final_label(tmp_path, monkeypatch):
+    _require_cuda_torch()
+    import json
+    from quad_mesh.generate_label import main as generate_label_main
+    import quad_mesh.train_quad_mesh as train_mod
+
+    mesh_path = _cube_mesh_path()
+    if not os.path.exists(mesh_path):
+        pytest.skip("sample cube mesh is not available")
+
+    call_index = {"value": 0}
+
+    def _forced_validation_metrics(**kwargs):
+        idx = call_index["value"]
+        call_index["value"] += 1
+        score = 0.1 if idx == 0 else 10.0
+        return {
+            "training": {"loss_total": score},
+            "field_validity": {"nan_count": 0, "flipped_frame_ratio": 0.0},
+            "field_smoothness": {"adjacent_cross_error_mean": 0.0},
+            "singularity_proxy": {"singularity_proxy_ratio": 0.0},
+            "score": score,
+            "evaluation": {"kind": "fixed_validation_batch", "global_step": idx + 1},
+        }
+
+    monkeypatch.setattr(train_mod, "_evaluate_validation_metrics", _forced_validation_metrics)
+
+    dataset_root = tmp_path / "dataset"
+    generate_label_main(
+        [
+            "--data_path",
+            mesh_path,
+            "--dataset_root",
+            str(dataset_root),
+            "--sample_id",
+            "cube-final-selected",
+            "--overwrite",
+            "--device",
+            "cuda",
+            "--num_epochs",
+            "2",
+            "--n_samples",
+            "1",
+            "--n_points",
+            "16",
+            "--batch_size",
+            "1",
+            "--num_workers",
+            "0",
+            "--log_interval",
+            "1",
+            "--save_checkpoint_interval",
+            "1",
+            "--eval_interval_steps",
+            "0",
+            "--save_best_by",
+            "val_field_score",
+            "--fast_nondeterministic",
+        ]
+    )
+
+    sample_dir = dataset_root / "cube-final-selected"
+    manifest = json.loads((sample_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["outputs"]["selected_label"] == "final"
+
+    packaged_best_metrics = json.loads(
+        (sample_dir / "metrics" / "train_metrics_best.json").read_text(encoding="utf-8")
+    )
+    raw_final_metrics = json.loads(
+        (sample_dir / "metrics" / "cube_final.json").read_text(encoding="utf-8")
+    )
+    assert packaged_best_metrics == raw_final_metrics
+
+    selected_validation_metrics = json.loads(
+        (sample_dir / "metrics" / "validation_metrics.json").read_text(encoding="utf-8")
+    )
+    assert selected_validation_metrics["score"] == pytest.approx(0.1)
+
+
+def test_generate_label_train_field_score_preserves_best_label(tmp_path, monkeypatch):
+    _require_cuda_torch()
+    import json
+    from quad_mesh.generate_label import main as generate_label_main
+    import quad_mesh.train_quad_mesh as train_mod
+
+    mesh_path = _cube_mesh_path()
+    if not os.path.exists(mesh_path):
+        pytest.skip("sample cube mesh is not available")
+
+    def _forced_validation_metrics(**kwargs):
+        return {
+            "training": {"loss_total": 123.0},
+            "field_validity": {"nan_count": 0, "flipped_frame_ratio": 0.0},
+            "field_smoothness": {"adjacent_cross_error_mean": 0.0},
+            "singularity_proxy": {"singularity_proxy_ratio": 0.0},
+            "score": 123.0,
+            "evaluation": {"kind": "fixed_validation_batch", "global_step": 1},
+        }
+
+    monkeypatch.setattr(train_mod, "_evaluate_validation_metrics", _forced_validation_metrics)
+
+    dataset_root = tmp_path / "dataset"
+    generate_label_main(
+        [
+            "--data_path",
+            mesh_path,
+            "--dataset_root",
+            str(dataset_root),
+            "--sample_id",
+            "cube-train-selected",
+            "--overwrite",
+            "--device",
+            "cuda",
+            "--num_epochs",
+            "2",
+            "--n_samples",
+            "1",
+            "--n_points",
+            "16",
+            "--batch_size",
+            "1",
+            "--num_workers",
+            "0",
+            "--log_interval",
+            "1",
+            "--save_checkpoint_interval",
+            "1",
+            "--eval_interval_steps",
+            "0",
+            "--save_best_by",
+            "train_field_score",
+            "--fast_nondeterministic",
+        ]
+    )
+
+    sample_dir = dataset_root / "cube-train-selected"
+    manifest = json.loads((sample_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["outputs"]["selected_label"] == "best"
+
+    packaged_best_metrics = json.loads(
+        (sample_dir / "metrics" / "train_metrics_best.json").read_text(encoding="utf-8")
+    )
+    raw_best_metrics = json.loads(
+        (sample_dir / "metrics" / "cube_best.json").read_text(encoding="utf-8")
+    )
+    assert packaged_best_metrics == raw_best_metrics

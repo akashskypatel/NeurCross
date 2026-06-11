@@ -237,6 +237,9 @@ The training entry point accepts the following arguments.
 | `--checkpoint_dir` | `None` | Directory for checkpoint files. If omitted, checkpoints are written to `<out_dir>\<mesh-name>\checkpoints\`. Relative paths are resolved under the mesh output directory. |
 | `--load_checkpoint` | `None` | Full checkpoint path used to resume training, including model weights, optimizer state, metadata, loss history, early-stopper state, and random state. |
 | `--export_weights_only` | disabled | Also writes `model_weights.pt` for inference-only or external loading workflows. |
+| `--save_best_by` | `val_field_score` | Chooses which field label becomes the canonical packaged output. `train_field_score` preserves the original training-score behavior. `val_field_score` compares fixed validation-batch scores between the train-best checkpoint and the final model. `quad_score` is intentionally deferred until downstream NeuralQuad quad metrics exist. |
+| `--eval_interval_steps` | `0` | Runs fixed validation-batch evaluation every `N` training steps and appends entries to `metrics/validation_history.json`. `0` disables in-loop validation and still writes final validation metrics. |
+| `--export_interval_steps` | `500` | Exports intermediate cross-field snapshots every `N` training steps in addition to final export. |
 | `--keep_last_n_checkpoints` | `3` | Number of recent periodic `checkpoint_step_*.pt` files to keep. Set to `0` to keep all periodic checkpoints. |
 | `--num_workers` | `4` | Number of `DataLoader` worker processes used for training batches. |
 | `--persistent_workers` | disabled | Keeps `DataLoader` workers alive across epochs to reduce worker startup overhead. |
