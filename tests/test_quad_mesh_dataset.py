@@ -114,6 +114,9 @@ def test_dataset_parser_accepts_new_sampling_controls():
     assert args.boundary_ratio == pytest.approx(0.8)
     assert args.near_surface_sigma == pytest.approx(0.01)
     assert args.uniform_extent == pytest.approx(0.6)
+    assert args.save_best_by == "val_field_score"
+    assert args.eval_interval_steps == 0
+    assert args.export_interval_steps == 500
 
 
 def test_dataset_parser_defaults_to_mixed_sampling():
@@ -123,3 +126,31 @@ def test_dataset_parser_defaults_to_mixed_sampling():
     args = parser.parse_args(["--data_path", "mesh.obj"])
 
     assert args.nonmnfld_sample_type == "mixed"
+
+
+def test_dataset_parser_accepts_save_best_by():
+    from quad_mesh.generate_label import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(["--data_path", "mesh.obj", "--save_best_by", "train_field_score"])
+
+    assert args.save_best_by == "train_field_score"
+
+
+def test_dataset_parser_accepts_eval_and_export_interval_steps():
+    from quad_mesh.generate_label import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--data_path",
+            "mesh.obj",
+            "--eval_interval_steps",
+            "2",
+            "--export_interval_steps",
+            "3",
+        ]
+    )
+
+    assert args.eval_interval_steps == 2
+    assert args.export_interval_steps == 3

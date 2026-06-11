@@ -223,6 +223,10 @@ def test_generate_label_writes_manifest(tmp_path):
             "0",
             "--log_interval",
             "1",
+            "--eval_interval_steps",
+            "1",
+            "--export_interval_steps",
+            "1",
             "--save_checkpoint_interval",
             "1",
             "--export_sdf_samples",
@@ -242,6 +246,7 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["neurcross_dataset_schema_version"] == "0.1"
     assert manifest["artifact_type"] == "neurcross_per_mesh_label"
     assert manifest["sample_id"] == "cube-sample"
+    assert manifest["outputs"]["selected_label"] in {"best", "final"}
     assert manifest["outputs"]["crossfield_best_vec"] == "fields/crossfield_best.vec"
     assert "crossfield_best_rawfield" not in manifest["outputs"]
     assert "crossfield_best_rosy" not in manifest["outputs"]
@@ -251,17 +256,20 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["outputs"]["command_path"] == "logs/command.txt"
     assert manifest["quality"]["acceptance_report_json"] == "metrics/acceptance_report.json"
     assert manifest["quality"]["validation_metrics_json"] == "metrics/validation_metrics.json"
+    assert manifest["quality"]["validation_history_json"] == "metrics/validation_history.json"
     assert manifest["quality"]["quality_gate"] == "default"
     assert manifest["training"]["python_version"]
     assert manifest["training"]["torch_version"]
     assert manifest["training"]["cuda_version"]
     assert manifest["training"]["platform"]
+    assert manifest["training"]["args"]["save_best_by"] == "val_field_score"
     assert not (dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz").exists()
     assert (dataset_root / "cube-sample" / "sdf" / "sdf_samples.npz").exists()
     assert (dataset_root / "cube-sample" / "metrics" / "validation_samples.npz").exists()
     assert (dataset_root / "cube-sample" / "logs" / "command.txt").exists()
     assert (dataset_root / "cube-sample" / "metrics" / "acceptance_report.json").exists()
     assert (dataset_root / "cube-sample" / "metrics" / "validation_metrics.json").exists()
+    assert (dataset_root / "cube-sample" / "metrics" / "validation_history.json").exists()
     sdf = np.load(dataset_root / "cube-sample" / "sdf" / "sdf_samples.npz")
     assert "query_points" in sdf.files
     assert "sdf_values" in sdf.files
@@ -279,6 +287,11 @@ def test_generate_label_writes_manifest(tmp_path):
     assert "score" in validation_metrics
     assert "field_validity" in validation_metrics
     assert validation_metrics["evaluation"]["kind"] == "fixed_validation_batch"
+    validation_history = json.loads(
+        (dataset_root / "cube-sample" / "metrics" / "validation_history.json").read_text(encoding="utf-8")
+    )
+    assert len(validation_history) >= 2
+    assert all("score" in item for item in validation_history)
 
 
 def test_generate_label_quarantines_low_quality(tmp_path, monkeypatch):

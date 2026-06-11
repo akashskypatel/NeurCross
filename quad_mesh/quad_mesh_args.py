@@ -130,6 +130,24 @@ def add_args(parser):
         help='also export model_weights.pt for inference-only use',
     )
     parser.add_argument(
+        '--save_best_by',
+        choices=('train_field_score', 'val_field_score', 'quad_score'),
+        default='val_field_score',
+        help='criterion used to choose the canonical exported label artifact',
+    )
+    parser.add_argument(
+        '--eval_interval_steps',
+        type=int,
+        default=0,
+        help='run fixed validation-batch evaluation every N training steps; 0 disables in-loop evaluation',
+    )
+    parser.add_argument(
+        '--export_interval_steps',
+        type=int,
+        default=500,
+        help='export cross-field snapshots every N training steps in addition to the final export',
+    )
+    parser.add_argument(
         '--keep_last_n_checkpoints',
         type=int,
         default=3,

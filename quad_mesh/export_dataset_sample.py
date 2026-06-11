@@ -150,6 +150,12 @@ def _build_acceptance_report(*, preflight_report: dict, best_metrics: dict, qual
     }
 
 
+def _selected_source_suffix(selected_label: str) -> str:
+    if selected_label not in {"best", "final"}:
+        raise ValueError(f"unsupported selected label source: {selected_label}")
+    return selected_label
+
+
 def build_manifest(
     *,
     output_dir: str,
@@ -174,6 +180,8 @@ def build_manifest(
     sdf_samples_path: str | None = None,
     validation_samples_path: str | None = None,
     validation_metrics_path: str | None = None,
+    validation_history_path: str | None = None,
+    selected_label: str = "best",
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
 ) -> dict[str, object]:
@@ -193,9 +201,10 @@ def build_manifest(
     _copy_required(normalized_obj_source, normalized_mesh_obj_copy)
 
     source_format = os.path.splitext(source_mesh_name)[1].lstrip(".").lower()
-    best_vec_source = os.path.join(output_dir, "save_crossField", f"{mesh_name}_best.vec")
+    selected_suffix = _selected_source_suffix(selected_label)
+    best_vec_source = os.path.join(output_dir, "save_crossField", f"{mesh_name}_{selected_suffix}.vec")
     final_vec_source = os.path.join(output_dir, "save_crossField", f"{mesh_name}_final.vec")
-    best_metrics_source = os.path.join(output_dir, "metrics", f"{mesh_name}_best.json")
+    best_metrics_source = os.path.join(output_dir, "metrics", f"{mesh_name}_{selected_suffix}.json")
     final_metrics_source = os.path.join(output_dir, "metrics", f"{mesh_name}_final.json")
 
     best_vec_path = _copy_required(best_vec_source, os.path.join(fields_dir, "crossfield_best.vec"))
@@ -212,6 +221,10 @@ def build_manifest(
     validation_metrics_copy_path = _copy_or_keep(
         validation_metrics_path,
         os.path.join(metrics_dir, "validation_metrics.json"),
+    )
+    validation_history_copy_path = _copy_or_keep(
+        validation_history_path,
+        os.path.join(metrics_dir, "validation_history.json"),
     )
     log_copy_path = _copy_required(log_path, os.path.join(logs_dir, "train.log"))
     command_txt_path = os.path.join(logs_dir, "command.txt")
@@ -287,7 +300,7 @@ def build_manifest(
             "stop_summary": stop_summary,
         },
         "outputs": {
-            "selected_label": "best",
+            "selected_label": selected_label,
             "crossfield_best_vec": _rel(output_dir, best_vec_path),
             "metrics_best_json": _rel(output_dir, best_metrics_path),
             "crossfield_final_vec": _rel(output_dir, final_vec_path),
@@ -302,6 +315,7 @@ def build_manifest(
             **quality,
             "warnings": preflight_report.get("warnings", []),
             "validation_metrics_json": _rel(output_dir, validation_metrics_copy_path),
+            "validation_history_json": _rel(output_dir, validation_history_copy_path),
             "acceptance_report_json": _rel(output_dir, acceptance_report_path),
         },
     }
@@ -452,6 +466,7 @@ def build_skipped_manifest(
             **quality,
             "warnings": list(preflight_report.get("warnings", [])),
             "validation_metrics_json": None,
+            "validation_history_json": None,
             "acceptance_report_json": _rel(output_dir, acceptance_report_path),
         },
     }
@@ -505,6 +520,7 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
         ("outputs", "log_path"),
         ("outputs", "command_path"),
         ("quality", "validation_metrics_json"),
+        ("quality", "validation_history_json"),
         ("quality", "acceptance_report_json"),
     )
     for section_name, field_name in path_fields:
@@ -561,6 +577,8 @@ def package_dataset_sample(
     sdf_samples_path: str | None = None,
     validation_samples_path: str | None = None,
     validation_metrics_path: str | None = None,
+    validation_history_path: str | None = None,
+    selected_label: str = "best",
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
 ) -> str:
@@ -588,6 +606,8 @@ def package_dataset_sample(
         sdf_samples_path=sdf_samples_path,
         validation_samples_path=validation_samples_path,
         validation_metrics_path=validation_metrics_path,
+        validation_history_path=validation_history_path,
+        selected_label=selected_label,
         export_geometry_npz=export_geometry_npz,
         quality_gate=quality_gate,
     )

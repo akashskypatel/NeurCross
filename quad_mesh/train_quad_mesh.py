@@ -239,12 +239,22 @@ def _write_validation_batch_artifact(out_dir: str, validation_batch: dict) -> st
     return path
 
 
-def _write_validation_metrics_artifact(out_dir: str, metrics: dict) -> str:
+def _write_validation_metrics_artifact(out_dir: str, metrics: dict, *, filename: str = "validation_metrics.json") -> str:
     metrics_dir = os.path.join(out_dir, "metrics")
     os.makedirs(metrics_dir, exist_ok=True)
-    path = os.path.join(metrics_dir, "validation_metrics.json")
+    path = os.path.join(metrics_dir, filename)
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
         json.dump(metrics, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    return path
+
+
+def _write_validation_history_artifact(out_dir: str, history: list[dict]) -> str:
+    metrics_dir = os.path.join(out_dir, "metrics")
+    os.makedirs(metrics_dir, exist_ok=True)
+    path = os.path.join(metrics_dir, "validation_history.json")
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(history, handle, indent=2, sort_keys=True)
         handle.write("\n")
     return path
 
@@ -317,6 +327,15 @@ def _evaluate_validation_metrics(
     finally:
         if was_training:
             net.train()
+
+
+def _copy_json_file(source_path: str, destination_path: str) -> str:
+    with open(source_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    with open(destination_path, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    return destination_path
 
 
 def _enforce_preflight_policy(preflight_report, policy: str):
@@ -447,6 +466,9 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     manifest_path = None
     validation_samples_path = None
     validation_metrics_path = None
+    validation_history_path = None
+    selected_label = "best"
+    validation_history = []
     if args.checkpoint_dir is None:
         checkpoint_dir = os.path.join(out_dir, "checkpoints")
     elif os.path.isabs(args.checkpoint_dir):
@@ -793,7 +815,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             last_batch_idx = batch_idx
             next_global_step = global_step + 1
             current_global_step = next_global_step
-            if batch_idx != 0 and (batch_idx % 500 == 0 or batch_idx == steps_per_epoch - 1):
+            export_interval_steps = max(int(getattr(args, "export_interval_steps", 500)), 0)
+            if batch_idx != 0 and (
+                (export_interval_steps > 0 and global_step > 0 and global_step % export_interval_steps == 0)
+                or batch_idx == steps_per_epoch - 1
+            ):
                 SAVE_BEST = True
             is_final_batch = epoch == args.num_epochs - 1 and batch_idx == steps_per_epoch - 1
 
@@ -997,6 +1023,32 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                     stopped_early = True
                     break
 
+            eval_interval_steps = max(int(getattr(args, "eval_interval_steps", 0)), 0)
+            if eval_interval_steps > 0 and next_global_step % eval_interval_steps == 0:
+                validation_metrics_step = _evaluate_validation_metrics(
+                    net=net,
+                    criterion=criterion,
+                    validation_batch=validation_batch,
+                    mnfld_points_base=mnfld_points_base,
+                    mnfld_n_gt=mnfld_n_gt,
+                    local_coord_u=local_coord_u,
+                    local_coord_v=local_coord_v,
+                    angle_feature_static=angle_feature_static,
+                    args=args,
+                    device=device,
+                    out_dir=out_dir,
+                    file_name=file_name,
+                    global_step=next_global_step,
+                )
+                validation_history.append(validation_metrics_step)
+                utils.log_string(
+                    "Validation: global_step={} score={:.6f}".format(
+                        next_global_step,
+                        float(validation_metrics_step["score"]),
+                    ),
+                    log_file,
+                )
+
             criterion.update_morse_weight(global_step, total_steps,
                                           args.decay_params)  # assumes batch size of 1
         if stopped_early:
@@ -1052,7 +1104,65 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             file_name=file_name,
             global_step=max(next_global_step - 1, 0),
         )
-        validation_metrics_path = _write_validation_metrics_artifact(out_dir, validation_metrics)
+        validation_metrics_final_path = _write_validation_metrics_artifact(
+            out_dir,
+            validation_metrics,
+            filename="validation_metrics_final.json",
+        )
+        validation_history.append(validation_metrics)
+        validation_history_path = _write_validation_history_artifact(out_dir, validation_history)
+        validation_metrics_path = validation_metrics_final_path
+        if args.save_best_by == "quad_score":
+            raise NotImplementedError("--save_best_by quad_score is not implemented yet")
+        if args.save_best_by == "val_field_score" and best_checkpoint_path:
+            best_checkpoint = load_checkpoint(best_checkpoint_path, device=device)
+            final_state_dict = net.state_dict()
+            net.load_state_dict(best_checkpoint.model_state_dict)
+            best_validation_metrics = _evaluate_validation_metrics(
+                net=net,
+                criterion=criterion,
+                validation_batch=validation_batch,
+                mnfld_points_base=mnfld_points_base,
+                mnfld_n_gt=mnfld_n_gt,
+                local_coord_u=local_coord_u,
+                local_coord_v=local_coord_v,
+                angle_feature_static=angle_feature_static,
+                args=args,
+                device=device,
+                out_dir=out_dir,
+                file_name=file_name,
+                global_step=int(best_checkpoint.metadata.global_step),
+            )
+            net.load_state_dict(final_state_dict)
+            best_validation_metrics_path = _write_validation_metrics_artifact(
+                out_dir,
+                best_validation_metrics,
+                filename="validation_metrics_best.json",
+            )
+            if float(best_validation_metrics["score"]) <= float(validation_metrics["score"]):
+                selected_label = "best"
+                validation_metrics_path = _copy_json_file(
+                    best_validation_metrics_path,
+                    os.path.join(out_dir, "metrics", "validation_metrics.json"),
+                )
+            else:
+                selected_label = "final"
+                validation_metrics_path = _copy_json_file(
+                    validation_metrics_final_path,
+                    os.path.join(out_dir, "metrics", "validation_metrics.json"),
+                )
+        elif args.save_best_by == "train_field_score":
+            selected_label = "best"
+            validation_metrics_path = _copy_json_file(
+                validation_metrics_final_path,
+                os.path.join(out_dir, "metrics", "validation_metrics.json"),
+            )
+        else:
+            selected_label = "final" if args.save_best_by == "val_field_score" else "best"
+            validation_metrics_path = _copy_json_file(
+                validation_metrics_final_path,
+                os.path.join(out_dir, "metrics", "validation_metrics.json"),
+            )
         if getattr(args, "dataset_root", None):
             from neurcross import __version__ as neurcross_version
 
@@ -1086,6 +1196,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 sdf_samples_path=sdf_samples_path,
                 validation_samples_path=validation_samples_path,
                 validation_metrics_path=validation_metrics_path,
+                validation_history_path=validation_history_path,
+                selected_label=selected_label,
                 export_geometry_npz=getattr(args, "export_geometry_npz", True),
                 quality_gate=getattr(args, "quality_gate", "default"),
             )
