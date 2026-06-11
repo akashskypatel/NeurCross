@@ -210,6 +210,9 @@ def test_generate_label_writes_manifest(tmp_path):
             "--overwrite",
             "--device",
             "cuda",
+            "--quality_gate",
+            "strict",
+            "--no-export_geometry_npz",
             "--num_epochs",
             "1",
             "--n_samples",
@@ -244,25 +247,19 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["outputs"]["crossfield_best_vec"] == "fields/crossfield_best.vec"
     assert "crossfield_best_rawfield" not in manifest["outputs"]
     assert "crossfield_best_rosy" not in manifest["outputs"]
-    assert manifest["outputs"]["geometry_npz"] == "geometry/mesh_geometry.npz"
+    assert manifest["outputs"]["geometry_npz"] is None
     assert manifest["outputs"]["sdf_samples_npz"] == "sdf/sdf_samples.npz"
     assert manifest["outputs"]["command_path"] == "logs/command.txt"
     assert manifest["quality"]["acceptance_report_json"] == "metrics/acceptance_report.json"
+    assert manifest["quality"]["quality_gate"] == "strict"
     assert manifest["training"]["python_version"]
     assert manifest["training"]["torch_version"]
     assert manifest["training"]["cuda_version"]
     assert manifest["training"]["platform"]
-    assert (dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz").exists()
+    assert not (dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz").exists()
     assert (dataset_root / "cube-sample" / "sdf" / "sdf_samples.npz").exists()
     assert (dataset_root / "cube-sample" / "logs" / "command.txt").exists()
     assert (dataset_root / "cube-sample" / "metrics" / "acceptance_report.json").exists()
-    geometry = np.load(dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz")
-    assert "normalization_center" in geometry.files
-    assert "normalization_scale" in geometry.files
-    assert "original_bounds_min" in geometry.files
-    assert "original_bounds_max" in geometry.files
-    assert "normalized_bounds_min" in geometry.files
-    assert "normalized_bounds_max" in geometry.files
     sdf = np.load(dataset_root / "cube-sample" / "sdf" / "sdf_samples.npz")
     assert "query_points" in sdf.files
     assert "sdf_values" in sdf.files

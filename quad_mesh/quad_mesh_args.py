@@ -32,6 +32,30 @@ def add_args(parser):
         action='store_true',
         help='allow writing into an existing dataset sample directory when using generate-label',
     )
+    parser.add_argument(
+        '--normalize_mesh',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='normalize the prepared mesh into [-0.5, 0.5]^3 before training and packaging',
+    )
+    parser.add_argument(
+        '--preflight_policy',
+        choices=('strict', 'repair', 'report_only'),
+        default='repair',
+        help='how generate-label handles preflight findings before training',
+    )
+    parser.add_argument(
+        '--export_geometry_npz',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='export geometry/mesh_geometry.npz for dataset-label runs',
+    )
+    parser.add_argument(
+        '--quality_gate',
+        choices=('none', 'default', 'strict', 'loose'),
+        default='default',
+        help='quality acceptance profile recorded and applied during dataset packaging',
+    )
     parser.add_argument('--model_name', type=str, default='model', help='trained model name')
     parser.add_argument('--seed', type=int, default=3627473, help='random seed')
     parser.add_argument(

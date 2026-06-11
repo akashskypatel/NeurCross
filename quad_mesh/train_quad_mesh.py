@@ -141,6 +141,17 @@ def _resolve_output_directory(args):
     return mesh_dir, file_name, out_dir
 
 
+def _enforce_preflight_policy(preflight_report, policy: str):
+    if preflight_report.status == "skip":
+        return preflight_report
+    if policy == "strict" and preflight_report.status != "accepted_for_training":
+        preflight_report.status = "skip"
+        preflight_report.skip_reason = (
+            "preflight_policy strict rejected mesh because warnings or conservative repairs were required"
+        )
+    return preflight_report
+
+
 class EarlyStopper:
     def __init__(
         self,
@@ -266,7 +277,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     mesh_report_path = os.path.join(out_dir, "mesh_quality_report.json")
 
     preflight_report, prepared_mesh = inspect_mesh_path(args.data_path)
-    if prepared_mesh is None:
+    preflight_report = _enforce_preflight_policy(preflight_report, getattr(args, "preflight_policy", "repair"))
+    if prepared_mesh is None or preflight_report.status == "skip":
         with open(mesh_report_path, "w", encoding="utf-8") as handle:
             json.dump(preflight_report.to_dict(), handle, indent=2, sort_keys=True)
         log_file.close()
@@ -277,7 +289,32 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             )
         )
 
-    normalized_export = export_normalized_mesh(prepared_mesh, input_dir)
+    if getattr(args, "normalize_mesh", True):
+        normalized_export = export_normalized_mesh(prepared_mesh, input_dir)
+        training_mesh_path = normalized_export.obj_path
+    else:
+        import numpy as np
+        from .normalize import NormalizationMetadata, NormalizedMeshExport
+
+        normalized_obj_path = os.path.join(input_dir, "normalized_mesh.obj")
+        normalized_ply_path = os.path.join(input_dir, "normalized_mesh.ply")
+        prepared_mesh.export(normalized_obj_path)
+        prepared_mesh.export(normalized_ply_path)
+        passthrough_metadata = NormalizationMetadata(
+            center=[0.0, 0.0, 0.0],
+            scale=1.0,
+            bounds_before_min=np.asarray(prepared_mesh.bounds[0], dtype=np.float64).astype(float).tolist(),
+            bounds_before_max=np.asarray(prepared_mesh.bounds[1], dtype=np.float64).astype(float).tolist(),
+            bounds_after_min=np.asarray(prepared_mesh.bounds[0], dtype=np.float64).astype(float).tolist(),
+            bounds_after_max=np.asarray(prepared_mesh.bounds[1], dtype=np.float64).astype(float).tolist(),
+        )
+        normalized_export = NormalizedMeshExport(
+            mesh=prepared_mesh.copy(),
+            obj_path=normalized_obj_path,
+            ply_path=normalized_ply_path,
+            metadata=passthrough_metadata,
+        )
+        training_mesh_path = args.data_path
     preflight_report.artifacts = {
         "normalized_mesh_obj": normalized_export.obj_path,
         "normalized_mesh_ply": normalized_export.ply_path,
@@ -294,8 +331,6 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         ),
         log_file,
     )
-    training_mesh_path = normalized_export.obj_path
-
     device = _resolve_device(torch, args.device)
     if device == 'cuda':
         torch.cuda.set_device(0)
@@ -767,6 +802,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             stop_summary=stop_summary,
             runtime_info=runtime_info,
             sdf_samples_path=sdf_samples_path,
+            export_geometry_npz=getattr(args, "export_geometry_npz", True),
+            quality_gate=getattr(args, "quality_gate", "default"),
         )
     return TrainingResult(
         args=args,

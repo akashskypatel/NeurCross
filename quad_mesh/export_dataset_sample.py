@@ -81,28 +81,37 @@ def _rel(root: str, path: str | None) -> str | None:
     return os.path.relpath(path, root).replace("\\", "/")
 
 
-def _quality_from_metrics(best_metrics: dict) -> dict[str, object]:
+def _quality_from_metrics(best_metrics: dict, *, gate_name: str = "default") -> dict[str, object]:
     field_validity = best_metrics.get("field_validity", {})
     score = float(best_metrics.get("score", best_metrics.get("field_score", 0.0)))
     nan_count = int(field_validity.get("nan_count", 0))
     flipped_frame_ratio = float(field_validity.get("flipped_frame_ratio", 0.0))
-    accepted = nan_count == 0
+    gate_profiles = {
+        "none": {"grade_a_score": float("inf"), "grade_b_score": float("inf"), "grade_b_flip": float("inf")},
+        "default": {"grade_a_score": 1.0, "grade_b_score": 5.0, "grade_b_flip": 0.05},
+        "strict": {"grade_a_score": 0.5, "grade_b_score": 2.5, "grade_b_flip": 0.02},
+        "loose": {"grade_a_score": 2.0, "grade_b_score": 8.0, "grade_b_flip": 0.1},
+    }
+    profile = gate_profiles[gate_name]
     if nan_count > 0:
         grade = "D"
         failure_reason = "field_contains_nonfinite_vectors"
-    elif score <= 1.0 and flipped_frame_ratio <= 0.01:
+    elif score <= profile["grade_a_score"] and flipped_frame_ratio <= min(0.01, profile["grade_b_flip"]):
         grade = "A"
         failure_reason = None
-    elif score <= 5.0 and flipped_frame_ratio <= 0.05:
+    elif score <= profile["grade_b_score"] and flipped_frame_ratio <= profile["grade_b_flip"]:
         grade = "B"
         failure_reason = None
     else:
         grade = "C"
         failure_reason = None
+    accepted = nan_count == 0
+    if gate_name == "strict":
+        accepted = accepted and grade in {"A", "B"}
     return {
         "accepted": accepted,
         "quality_grade": grade,
-        "quality_gate": "default_v0",
+        "quality_gate": gate_name,
         "field_score": score,
         "failure_reason": failure_reason,
     }
@@ -147,6 +156,8 @@ def build_manifest(
     stop_summary: dict | None,
     runtime_info: dict[str, object] | None = None,
     sdf_samples_path: str | None = None,
+    export_geometry_npz: bool = True,
+    quality_gate: str = "default",
 ) -> dict[str, object]:
     runtime_info = runtime_info or {}
     source_mesh_name = os.path.basename(source_mesh_path)
@@ -171,7 +182,9 @@ def build_manifest(
 
     best_vec_path = _copy_required(best_vec_source, os.path.join(fields_dir, "crossfield_best.vec"))
     final_vec_path = _copy_if_exists(final_vec_source, os.path.join(fields_dir, "crossfield_final.vec"))
-    geometry_npz_path = _export_geometry_npz(normalized_obj_source, geometry_dir, normalization)
+    geometry_npz_path = None
+    if export_geometry_npz:
+        geometry_npz_path = _export_geometry_npz(normalized_obj_source, geometry_dir, normalization)
     best_metrics_path = _copy_required(best_metrics_source, os.path.join(metrics_dir, "train_metrics_best.json"))
     final_metrics_path = _copy_if_exists(final_metrics_source, os.path.join(metrics_dir, "train_metrics_final.json"))
     log_copy_path = _copy_required(log_path, os.path.join(logs_dir, "train.log"))
@@ -181,7 +194,7 @@ def build_manifest(
         handle.write("\n")
 
     best_metrics = _load_json(best_metrics_path)
-    quality = _quality_from_metrics(best_metrics)
+    quality = _quality_from_metrics(best_metrics, gate_name=quality_gate)
     acceptance_report = _build_acceptance_report(
         preflight_report=preflight_report,
         best_metrics=best_metrics,
@@ -363,6 +376,8 @@ def package_dataset_sample(
     stop_summary: dict | None,
     runtime_info: dict[str, object] | None = None,
     sdf_samples_path: str | None = None,
+    export_geometry_npz: bool = True,
+    quality_gate: str = "default",
 ) -> str:
     created_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     manifest = build_manifest(
@@ -386,5 +401,7 @@ def package_dataset_sample(
         stop_summary=stop_summary,
         runtime_info=runtime_info,
         sdf_samples_path=sdf_samples_path,
+        export_geometry_npz=export_geometry_npz,
+        quality_gate=quality_gate,
     )
     return write_manifest(manifest, output_dir)

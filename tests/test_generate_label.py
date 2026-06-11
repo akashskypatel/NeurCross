@@ -27,6 +27,12 @@ def test_generate_label_parser_accepts_dataset_args():
             "--sample_id",
             "sample-001",
             "--overwrite",
+            "--preflight_policy",
+            "strict",
+            "--quality_gate",
+            "loose",
+            "--no-export_geometry_npz",
+            "--no-normalize_mesh",
             "--num_epochs",
             "1",
         ]
@@ -36,6 +42,10 @@ def test_generate_label_parser_accepts_dataset_args():
     assert args.dataset_root == "labels"
     assert args.sample_id == "sample-001"
     assert args.overwrite is True
+    assert args.preflight_policy == "strict"
+    assert args.quality_gate == "loose"
+    assert args.export_geometry_npz is False
+    assert args.normalize_mesh is False
 
 
 def test_cli_help_lists_generate_label():
