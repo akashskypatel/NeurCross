@@ -6,6 +6,10 @@ import os
 import shutil
 from datetime import datetime, timezone
 
+import numpy as np
+
+from .convert_crossfield import convert_crossfield_to_rawfield
+
 
 def _sha256_file(path: str) -> str:
     digest = hashlib.sha256()
@@ -18,6 +22,33 @@ def _sha256_file(path: str) -> str:
 def _load_json(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _count_crossfield_rows(path: str) -> int:
+    count = 0
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            stripped = raw_line.split("#", 1)[0].strip()
+            if stripped:
+                count += 1
+    return count
+
+
+def _export_geometry_npz(normalized_mesh_obj_path: str, geometry_dir: str) -> str:
+    import trimesh
+
+    os.makedirs(geometry_dir, exist_ok=True)
+    mesh = trimesh.load(normalized_mesh_obj_path, force="mesh", process=False)
+    path = os.path.join(geometry_dir, "mesh_geometry.npz")
+    np.savez(
+        path,
+        vertices=np.asarray(mesh.vertices, dtype=np.float32),
+        faces=np.asarray(mesh.faces, dtype=np.int32),
+        face_normals=np.asarray(mesh.face_normals, dtype=np.float32),
+        vertex_normals=np.asarray(mesh.vertex_normals, dtype=np.float32),
+        face_centers=np.asarray(mesh.triangles_center, dtype=np.float32),
+    )
+    return path
 
 
 def _copy_if_exists(source_path: str | None, destination_path: str) -> str | None:
@@ -99,6 +130,7 @@ def build_manifest(
     normalized_mesh_copy = os.path.join(output_dir, "input", "normalized_mesh.ply")
     normalized_mesh_obj_copy = os.path.join(output_dir, "input", "normalized_mesh.obj")
     fields_dir = os.path.join(output_dir, "fields")
+    geometry_dir = os.path.join(output_dir, "geometry")
     metrics_dir = os.path.join(output_dir, "metrics")
     logs_dir = os.path.join(output_dir, "logs")
 
@@ -119,9 +151,18 @@ def build_manifest(
     final_vec_path = _copy_if_exists(final_vec_source, os.path.join(fields_dir, "crossfield_final.vec"))
     best_rosy_path = _copy_if_exists(best_rosy_source, os.path.join(fields_dir, "crossfield_best.rosy"))
     final_rosy_path = _copy_if_exists(final_rosy_source, os.path.join(fields_dir, "crossfield_final.rosy"))
+    best_rawfield_path = str(convert_crossfield_to_rawfield(best_vec_path))
+    final_rawfield_path = None
+    if final_vec_path:
+        final_rawfield_path = str(convert_crossfield_to_rawfield(final_vec_path))
+    geometry_npz_path = _export_geometry_npz(normalized_obj_source, geometry_dir)
     best_metrics_path = _copy_required(best_metrics_source, os.path.join(metrics_dir, "train_metrics_best.json"))
     final_metrics_path = _copy_if_exists(final_metrics_source, os.path.join(metrics_dir, "train_metrics_final.json"))
     log_copy_path = _copy_required(log_path, os.path.join(logs_dir, "train.log"))
+    command_txt_path = os.path.join(logs_dir, "command.txt")
+    with open(command_txt_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(training_command)
+        handle.write("\n")
 
     best_metrics = _load_json(best_metrics_path)
     quality = _quality_from_metrics(best_metrics)
@@ -184,14 +225,16 @@ def build_manifest(
             "crossfield_best_vec": _rel(output_dir, best_vec_path),
             "metrics_best_json": _rel(output_dir, best_metrics_path),
             "crossfield_best_rosy": _rel(output_dir, best_rosy_path),
-            "crossfield_best_rawfield": None,
+            "crossfield_best_rawfield": _rel(output_dir, best_rawfield_path),
             "crossfield_final_vec": _rel(output_dir, final_vec_path),
             "metrics_final_json": _rel(output_dir, final_metrics_path),
-            "geometry_npz": None,
+            "crossfield_final_rawfield": _rel(output_dir, final_rawfield_path),
+            "geometry_npz": _rel(output_dir, geometry_npz_path),
             "sdf_samples_npz": None,
             "quad_mesh_path": None,
             "quad_metrics_json": None,
             "log_path": _rel(output_dir, log_copy_path),
+            "command_path": _rel(output_dir, command_txt_path),
         },
         "quality": {
             **quality,
@@ -243,7 +286,9 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
         ("mesh", "normalized_mesh_path"),
         ("outputs", "crossfield_best_vec"),
         ("outputs", "metrics_best_json"),
+        ("outputs", "geometry_npz"),
         ("outputs", "log_path"),
+        ("outputs", "command_path"),
     )
     for section_name, field_name in path_fields:
         value = manifest[section_name].get(field_name)
@@ -258,6 +303,12 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
     normalized_path = os.path.join(output_dir, manifest["mesh"]["normalized_mesh_path"])
     if _sha256_file(normalized_path) != manifest["mesh"]["normalized_mesh_sha256"]:
         raise ValueError("normalized mesh sha256 does not match manifest")
+    expected_rows = int(manifest["mesh"]["face_count"])
+    actual_rows = _count_crossfield_rows(os.path.join(output_dir, manifest["outputs"]["crossfield_best_vec"]))
+    if actual_rows != expected_rows:
+        raise ValueError(
+            f"cross-field row count mismatch: expected {expected_rows} rows from face_count, got {actual_rows}"
+        )
 
 
 def write_manifest(manifest: dict, output_dir: str) -> str:

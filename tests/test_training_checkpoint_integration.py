@@ -234,3 +234,9 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["artifact_type"] == "neurcross_per_mesh_label"
     assert manifest["sample_id"] == "cube-sample"
     assert manifest["outputs"]["crossfield_best_vec"] == "fields/crossfield_best.vec"
+    assert manifest["outputs"]["crossfield_best_rawfield"] == "fields/crossfield_best.rawfield"
+    assert manifest["outputs"]["geometry_npz"] == "geometry/mesh_geometry.npz"
+    assert manifest["outputs"]["command_path"] == "logs/command.txt"
+    assert (dataset_root / "cube-sample" / "fields" / "crossfield_best.rawfield").exists()
+    assert (dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz").exists()
+    assert (dataset_root / "cube-sample" / "logs" / "command.txt").exists()
