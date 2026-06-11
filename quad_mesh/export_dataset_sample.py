@@ -34,7 +34,7 @@ def _count_crossfield_rows(path: str) -> int:
     return count
 
 
-def _export_geometry_npz(normalized_mesh_obj_path: str, geometry_dir: str) -> str:
+def _export_geometry_npz(normalized_mesh_obj_path: str, geometry_dir: str, normalization: dict) -> str:
     import trimesh
 
     os.makedirs(geometry_dir, exist_ok=True)
@@ -47,6 +47,12 @@ def _export_geometry_npz(normalized_mesh_obj_path: str, geometry_dir: str) -> st
         face_normals=np.asarray(mesh.face_normals, dtype=np.float32),
         vertex_normals=np.asarray(mesh.vertex_normals, dtype=np.float32),
         face_centers=np.asarray(mesh.triangles_center, dtype=np.float32),
+        normalization_center=np.asarray(normalization["center"], dtype=np.float32),
+        normalization_scale=np.asarray([normalization["scale"]], dtype=np.float32),
+        original_bounds_min=np.asarray(normalization.get("bounds_before_min", []), dtype=np.float32),
+        original_bounds_max=np.asarray(normalization.get("bounds_before_max", []), dtype=np.float32),
+        normalized_bounds_min=np.asarray(normalization.get("bounds_after_min", []), dtype=np.float32),
+        normalized_bounds_max=np.asarray(normalization.get("bounds_after_max", []), dtype=np.float32),
     )
     return path
 
@@ -104,6 +110,23 @@ def _quality_from_metrics(best_metrics: dict) -> dict[str, object]:
     }
 
 
+def _build_acceptance_report(*, preflight_report: dict, best_metrics: dict, quality: dict[str, object]) -> dict[str, object]:
+    return {
+        "accepted": bool(quality["accepted"]),
+        "quality_grade": quality["quality_grade"],
+        "quality_gate": quality["quality_gate"],
+        "field_score": float(quality["field_score"]),
+        "failure_reason": quality["failure_reason"],
+        "warnings": list(preflight_report.get("warnings", [])),
+        "preflight_status": preflight_report.get("status"),
+        "repair_actions": list(preflight_report.get("repair_actions", [])),
+        "field_validity": best_metrics.get("field_validity"),
+        "field_smoothness": best_metrics.get("field_smoothness"),
+        "singularity_proxy": best_metrics.get("singularity_proxy"),
+        "training": best_metrics.get("training"),
+    }
+
+
 def build_manifest(
     *,
     output_dir: str,
@@ -157,7 +180,7 @@ def build_manifest(
     final_rawfield_path = None
     if final_vec_path:
         final_rawfield_path = str(convert_crossfield_to_rawfield(final_vec_path))
-    geometry_npz_path = _export_geometry_npz(normalized_obj_source, geometry_dir)
+    geometry_npz_path = _export_geometry_npz(normalized_obj_source, geometry_dir, normalization)
     best_metrics_path = _copy_required(best_metrics_source, os.path.join(metrics_dir, "train_metrics_best.json"))
     final_metrics_path = _copy_if_exists(final_metrics_source, os.path.join(metrics_dir, "train_metrics_final.json"))
     log_copy_path = _copy_required(log_path, os.path.join(logs_dir, "train.log"))
@@ -168,6 +191,15 @@ def build_manifest(
 
     best_metrics = _load_json(best_metrics_path)
     quality = _quality_from_metrics(best_metrics)
+    acceptance_report = _build_acceptance_report(
+        preflight_report=preflight_report,
+        best_metrics=best_metrics,
+        quality=quality,
+    )
+    acceptance_report_path = os.path.join(metrics_dir, "acceptance_report.json")
+    with open(acceptance_report_path, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(acceptance_report, handle, indent=2, sort_keys=True)
+        handle.write("\n")
 
     manifest = {
         "neurcross_dataset_schema_version": "0.1",
@@ -243,7 +275,7 @@ def build_manifest(
             **quality,
             "warnings": preflight_report.get("warnings", []),
             "validation_metrics_json": None,
-            "acceptance_report_json": None,
+            "acceptance_report_json": _rel(output_dir, acceptance_report_path),
         },
     }
     return manifest
@@ -292,6 +324,7 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
         ("outputs", "geometry_npz"),
         ("outputs", "log_path"),
         ("outputs", "command_path"),
+        ("quality", "acceptance_report_json"),
     )
     for section_name, field_name in path_fields:
         value = manifest[section_name].get(field_name)

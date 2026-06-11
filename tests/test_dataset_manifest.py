@@ -21,6 +21,7 @@ def test_validate_manifest_accepts_minimum_schema(tmp_path):
     best_vec = fields_dir / "crossfield_best.vec"
     geometry_npz = geometry_dir / "mesh_geometry.npz"
     best_metrics = metrics_dir / "train_metrics_best.json"
+    acceptance_report = metrics_dir / "acceptance_report.json"
     train_log = logs_dir / "train.log"
     command_txt = logs_dir / "command.txt"
 
@@ -29,6 +30,7 @@ def test_validate_manifest_accepts_minimum_schema(tmp_path):
     best_vec.write_text("1 0 0 0 1 0\n", encoding="utf-8")
     geometry_npz.write_bytes(b"npz")
     best_metrics.write_text("{}", encoding="utf-8")
+    acceptance_report.write_text("{}", encoding="utf-8")
     train_log.write_text("log\n", encoding="utf-8")
     command_txt.write_text("python -m neurcross generate-label\n", encoding="utf-8")
 
@@ -85,6 +87,7 @@ def test_validate_manifest_accepts_minimum_schema(tmp_path):
             "quality_gate": "default_v0",
             "field_score": 0.1,
             "failure_reason": None,
+            "acceptance_report_json": "metrics/acceptance_report.json",
         },
     }
 
@@ -135,6 +138,7 @@ def test_validate_manifest_rejects_crossfield_row_count_mismatch(tmp_path):
     geometry = tmp_path / "geometry" / "mesh_geometry.npz"
     log_path = tmp_path / "logs" / "train.log"
     command_path = tmp_path / "logs" / "command.txt"
+    acceptance_report = tmp_path / "metrics" / "acceptance_report.json"
 
     source_mesh.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
     normalized_mesh.write_text("ply\nformat ascii 1.0\nend_header\n", encoding="utf-8")
@@ -143,6 +147,7 @@ def test_validate_manifest_rejects_crossfield_row_count_mismatch(tmp_path):
     geometry.write_bytes(b"npz")
     log_path.write_text("log\n", encoding="utf-8")
     command_path.write_text("cmd\n", encoding="utf-8")
+    acceptance_report.write_text("{}", encoding="utf-8")
 
     def sha(path):
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -195,6 +200,7 @@ def test_validate_manifest_rejects_crossfield_row_count_mismatch(tmp_path):
             "quality_gate": "default_v0",
             "field_score": 0.1,
             "failure_reason": None,
+            "acceptance_report_json": "metrics/acceptance_report.json",
         },
     }
 

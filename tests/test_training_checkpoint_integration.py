@@ -191,6 +191,7 @@ def test_early_stop_writes_checkpoint(tmp_path):
 def test_generate_label_writes_manifest(tmp_path):
     _require_cuda_torch()
     import json
+    import numpy as np
     from quad_mesh.generate_label import main as generate_label_main
 
     mesh_path = _cube_mesh_path()
@@ -237,6 +238,7 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["outputs"]["crossfield_best_rawfield"] == "fields/crossfield_best.rawfield"
     assert manifest["outputs"]["geometry_npz"] == "geometry/mesh_geometry.npz"
     assert manifest["outputs"]["command_path"] == "logs/command.txt"
+    assert manifest["quality"]["acceptance_report_json"] == "metrics/acceptance_report.json"
     assert manifest["training"]["python_version"]
     assert manifest["training"]["torch_version"]
     assert manifest["training"]["cuda_version"]
@@ -244,3 +246,11 @@ def test_generate_label_writes_manifest(tmp_path):
     assert (dataset_root / "cube-sample" / "fields" / "crossfield_best.rawfield").exists()
     assert (dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz").exists()
     assert (dataset_root / "cube-sample" / "logs" / "command.txt").exists()
+    assert (dataset_root / "cube-sample" / "metrics" / "acceptance_report.json").exists()
+    geometry = np.load(dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz")
+    assert "normalization_center" in geometry.files
+    assert "normalization_scale" in geometry.files
+    assert "original_bounds_min" in geometry.files
+    assert "original_bounds_max" in geometry.files
+    assert "normalized_bounds_min" in geometry.files
+    assert "normalized_bounds_max" in geometry.files
