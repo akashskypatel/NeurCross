@@ -114,3 +114,12 @@ def test_dataset_parser_accepts_new_sampling_controls():
     assert args.boundary_ratio == pytest.approx(0.8)
     assert args.near_surface_sigma == pytest.approx(0.01)
     assert args.uniform_extent == pytest.approx(0.6)
+
+
+def test_dataset_parser_defaults_to_mixed_sampling():
+    from quad_mesh.generate_label import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(["--data_path", "mesh.obj"])
+
+    assert args.nonmnfld_sample_type == "mixed"

@@ -27,6 +27,14 @@ def _compute_signed_or_unsigned_distance(
     query_points: np.ndarray,
     rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray]:
+    if not bool(mesh.is_watertight):
+        try:
+            _closest_points, distances, _triangle_id = trimesh.proximity.closest_point(mesh, query_points)
+            unsigned = np.asarray(distances, dtype=np.float32)
+        except Exception:
+            unsigned = _surface_kdtree_distance(mesh, query_points, rng)
+        reliability = np.zeros(unsigned.shape[0], dtype=bool)
+        return unsigned, reliability
     try:
         signed = trimesh.proximity.signed_distance(mesh, query_points)
         signed = np.asarray(signed, dtype=np.float32)

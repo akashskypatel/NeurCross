@@ -220,7 +220,13 @@ The training entry point accepts the following arguments.
 | `--n_samples` | `10000` | Number of dataset samples exposed per epoch through the dataset length. This directly affects the number of training iterations for each epoch. |
 | `--n_points` | `15000` | Number of points sampled per training item for manifold and non-manifold point sets. Larger values increase memory and compute cost. |
 | `--grid_res` | `256` | Uniform grid resolution parameter passed into the dataset. It is part of the original training configuration, though the current dataset code does not use it directly. |
-| `--nonmnfld_sample_type` | `gaussian` | Intended strategy for off-surface sampling. Accepted values in the help text are `grid`, `gaussian`, and `combined`, but the current dataset implementation always samples uniformly in the configured range. |
+| `--nonmnfld_sample_type` | `mixed` | Off-surface sampling strategy. `uniform` samples random points in the normalized volume, `near_surface` samples Gaussian offsets around sampled surface points, `mixed` blends uniform/near-surface/feature-biased samples, and `feature_biased` oversamples boundary and high-normal-variation faces. Legacy spellings `grid`, `gaussian`, and `combined` are still accepted as aliases. |
+| `--near_surface_ratio` | `None` | Optional mixed-mode weight for near-surface off-manifold samples. When omitted, mixed mode uses the internal default ratio profile. |
+| `--uniform_ratio` | `None` | Optional mixed-mode weight for uniform off-manifold samples. |
+| `--feature_ratio` | `None` | Optional mixed-mode weight for feature-biased off-manifold samples. |
+| `--boundary_ratio` | `0.5` | Blends feature-biased sampling between boundary emphasis and face-normal-variation emphasis. |
+| `--near_surface_sigma` | `None` | Optional fixed Gaussian sigma for near-surface off-manifold sampling in normalized coordinates. If omitted, NeurCross derives a local sigma from face-center neighborhoods. |
+| `--uniform_extent` | `None` | Optional normalized-space extent for uniform off-manifold sampling. If omitted, NeurCross uses the existing `grid_res`-driven range setting. |
 | `--num_epochs` | `10` | Number of epochs to run. |
 | `--lr` | `5e-5` | Adam learning rate used for optimizing the model. |
 | `--grad_clip_norm` | `10.0` | Gradient clipping threshold. Set to `0` or a negative value to disable clipping. |
@@ -272,6 +278,12 @@ Notes:
 - Boolean flags defined with `action='store_true'` such as `--udf`, `--output_any`, `--morse_near`, and `--weight_for_morse` are disabled by default and become enabled when the flag is present.
 - `--use_morse_nonmnfld_grad` and `--use_vertices` use `type=bool`, so if you pass them explicitly on the command line, use forms such as `--use_vertices True` or `--use_vertices False`.
 - Some arguments are preserved from the original research code even when the current training path uses them lightly or not at all. The table above reflects the behavior of the current repository state.
+
+Sampling notes:
+
+- The current default is `mixed`, which combines uniform, near-surface, and feature-biased off-manifold samples.
+- `mixed` mode uses deterministic weighted allocation across uniform, near-surface, and feature-biased samples.
+- Dataset sampling is now deterministic for a fixed `--seed`, with epoch-specific variation driven through the training loop.
 
 ## GPU Memory Guards
 

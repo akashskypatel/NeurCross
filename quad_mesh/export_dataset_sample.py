@@ -65,6 +65,14 @@ def _copy_if_exists(source_path: str | None, destination_path: str) -> str | Non
     return destination_path
 
 
+def _copy_or_keep(source_path: str | None, destination_path: str) -> str | None:
+    if not source_path or not os.path.exists(source_path):
+        return None
+    if os.path.abspath(source_path) == os.path.abspath(destination_path):
+        return destination_path
+    return _copy_if_exists(source_path, destination_path)
+
+
 def _copy_required(source_path: str, destination_path: str) -> str:
     if not os.path.exists(source_path):
         raise FileNotFoundError(source_path)
@@ -164,6 +172,7 @@ def build_manifest(
     stop_summary: dict | None,
     runtime_info: dict[str, object] | None = None,
     sdf_samples_path: str | None = None,
+    validation_samples_path: str | None = None,
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
 ) -> dict[str, object]:
@@ -195,6 +204,10 @@ def build_manifest(
         geometry_npz_path = _export_geometry_npz(normalized_obj_source, geometry_dir, normalization)
     best_metrics_path = _copy_required(best_metrics_source, os.path.join(metrics_dir, "train_metrics_best.json"))
     final_metrics_path = _copy_if_exists(final_metrics_source, os.path.join(metrics_dir, "train_metrics_final.json"))
+    validation_samples_copy_path = _copy_or_keep(
+        validation_samples_path,
+        os.path.join(metrics_dir, "validation_samples.npz"),
+    )
     log_copy_path = _copy_required(log_path, os.path.join(logs_dir, "train.log"))
     command_txt_path = os.path.join(logs_dir, "command.txt")
     with open(command_txt_path, "w", encoding="utf-8", newline="\n") as handle:
@@ -276,6 +289,7 @@ def build_manifest(
             "metrics_final_json": _rel(output_dir, final_metrics_path),
             "geometry_npz": _rel(output_dir, geometry_npz_path),
             "sdf_samples_npz": _rel(output_dir, sdf_samples_path),
+            "validation_samples_npz": _rel(output_dir, validation_samples_copy_path),
             "log_path": _rel(output_dir, log_copy_path),
             "command_path": _rel(output_dir, command_txt_path),
         },
@@ -425,6 +439,7 @@ def build_skipped_manifest(
             "metrics_final_json": None,
             "geometry_npz": None,
             "sdf_samples_npz": None,
+            "validation_samples_npz": None,
             "log_path": _rel(output_dir, log_copy_path),
             "command_path": _rel(output_dir, command_txt_path),
         },
@@ -481,6 +496,7 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
         ("outputs", "crossfield_best_vec"),
         ("outputs", "metrics_best_json"),
         ("outputs", "geometry_npz"),
+        ("outputs", "validation_samples_npz"),
         ("outputs", "log_path"),
         ("outputs", "command_path"),
         ("quality", "acceptance_report_json"),
@@ -537,6 +553,7 @@ def package_dataset_sample(
     stop_summary: dict | None,
     runtime_info: dict[str, object] | None = None,
     sdf_samples_path: str | None = None,
+    validation_samples_path: str | None = None,
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
 ) -> str:
@@ -562,6 +579,7 @@ def package_dataset_sample(
         stop_summary=stop_summary,
         runtime_info=runtime_info,
         sdf_samples_path=sdf_samples_path,
+        validation_samples_path=validation_samples_path,
         export_geometry_npz=export_geometry_npz,
         quality_gate=quality_gate,
     )

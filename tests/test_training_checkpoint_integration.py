@@ -247,6 +247,7 @@ def test_generate_label_writes_manifest(tmp_path):
     assert "crossfield_best_rosy" not in manifest["outputs"]
     assert manifest["outputs"]["geometry_npz"] is None
     assert manifest["outputs"]["sdf_samples_npz"] == "sdf/sdf_samples.npz"
+    assert manifest["outputs"]["validation_samples_npz"] == "metrics/validation_samples.npz"
     assert manifest["outputs"]["command_path"] == "logs/command.txt"
     assert manifest["quality"]["acceptance_report_json"] == "metrics/acceptance_report.json"
     assert manifest["quality"]["quality_gate"] == "default"
@@ -256,6 +257,7 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["training"]["platform"]
     assert not (dataset_root / "cube-sample" / "geometry" / "mesh_geometry.npz").exists()
     assert (dataset_root / "cube-sample" / "sdf" / "sdf_samples.npz").exists()
+    assert (dataset_root / "cube-sample" / "metrics" / "validation_samples.npz").exists()
     assert (dataset_root / "cube-sample" / "logs" / "command.txt").exists()
     assert (dataset_root / "cube-sample" / "metrics" / "acceptance_report.json").exists()
     sdf = np.load(dataset_root / "cube-sample" / "sdf" / "sdf_samples.npz")
@@ -264,6 +266,11 @@ def test_generate_label_writes_manifest(tmp_path):
     assert "tsdf_values" in sdf.files
     assert "sample_type" in sdf.files
     assert "sign_reliability" in sdf.files
+    validation = np.load(dataset_root / "cube-sample" / "metrics" / "validation_samples.npz")
+    assert "nonmnfld_points" in validation.files
+    assert "near_points" in validation.files
+    assert "nonmnfld_sample_labels" in validation.files
+    assert "validation_face_indices" in validation.files
 
 
 def test_generate_label_quarantines_low_quality(tmp_path, monkeypatch):

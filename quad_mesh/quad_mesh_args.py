@@ -85,7 +85,7 @@ def add_args(parser):
     parser.add_argument(
         '--nonmnfld_sample_type',
         choices=('uniform', 'near_surface', 'mixed', 'feature_biased', 'grid', 'gaussian', 'combined'),
-        default='uniform',
+        default='mixed',
         help='how to sample off-manifold points for training',
     )
     parser.add_argument('--near_surface_ratio', type=float, default=None, help='mixed-mode ratio allocated to near-surface off-manifold samples')

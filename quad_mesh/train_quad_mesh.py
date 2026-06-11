@@ -225,6 +225,20 @@ def _capture_failed_dataset_run(
     )
 
 
+def _write_validation_batch_artifact(out_dir: str, validation_batch: dict) -> str:
+    import numpy as np
+
+    metrics_dir = os.path.join(out_dir, "metrics")
+    os.makedirs(metrics_dir, exist_ok=True)
+    path = os.path.join(metrics_dir, "validation_samples.npz")
+    payload = {
+        key: np.asarray(value)
+        for key, value in validation_batch.items()
+    }
+    np.savez(path, **payload)
+    return path
+
+
 def _enforce_preflight_policy(preflight_report, policy: str):
     if preflight_report.status == "skip":
         return preflight_report
@@ -351,6 +365,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     mesh_dir, file_name, out_dir = _resolve_output_directory(args)
     run_started_utc = utc_timestamp()
     manifest_path = None
+    validation_samples_path = None
     if args.checkpoint_dir is None:
         checkpoint_dir = os.path.join(out_dir, "checkpoints")
     elif os.path.isabs(args.checkpoint_dir):
@@ -472,6 +487,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             seed=args.seed,
         )
         static_batch = train_set.get_static_batch()
+        validation_batch = train_set.get_validation_batch()
+        validation_samples_path = _write_validation_batch_artifact(out_dir, validation_batch)
 
         train_dataloader = torch.utils.data.DataLoader(
             train_set,
@@ -970,6 +987,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 stop_summary=stop_summary,
                 runtime_info=runtime_info,
                 sdf_samples_path=sdf_samples_path,
+                validation_samples_path=validation_samples_path,
                 export_geometry_npz=getattr(args, "export_geometry_npz", True),
                 quality_gate=getattr(args, "quality_gate", "default"),
             )
