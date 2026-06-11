@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -80,6 +81,7 @@ class TrainingResult:
     checkpoint_path: str | None = None
     best_checkpoint_path: str | None = None
     weights_path: str | None = None
+    manifest_path: str | None = None
 
 
 def _build_training_args(argv=None, args=None, **overrides):
@@ -105,6 +107,37 @@ def _configure_programmatic_dataloader_workers(args, *, allow_multiprocessing_wo
         'if __name__ == "__main__".',
         file=sys.stderr,
     )
+
+
+def _resolve_output_directory(args):
+    mesh_dir = os.path.dirname(os.path.abspath(args.data_path))
+    file_name = os.path.splitext(os.path.basename(args.data_path))[0]
+    dataset_root = getattr(args, "dataset_root", None)
+    sample_id = getattr(args, "sample_id", None)
+    if dataset_root:
+        if not sample_id:
+            raise ValueError("--sample_id is required when --dataset_root is set")
+        if os.path.isabs(dataset_root):
+            dataset_root_path = dataset_root
+        else:
+            dataset_root_path = os.path.join(mesh_dir, dataset_root)
+        out_dir = os.path.join(dataset_root_path, sample_id)
+        if os.path.exists(out_dir) and not getattr(args, "overwrite", False):
+            raise FileExistsError(
+                "Dataset sample directory already exists: {}. Pass --overwrite to reuse it.".format(out_dir)
+            )
+        os.makedirs(out_dir, exist_ok=True)
+        return mesh_dir, file_name, out_dir
+
+    if args.out_dir is None:
+        out_dir_root = mesh_dir
+    elif os.path.isabs(args.out_dir):
+        out_dir_root = args.out_dir
+    else:
+        out_dir_root = os.path.join(mesh_dir, args.out_dir)
+    out_dir = os.path.join(out_dir_root, file_name)
+    os.makedirs(out_dir, exist_ok=True)
+    return mesh_dir, file_name, out_dir
 
 
 class EarlyStopper:
@@ -192,6 +225,9 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         save_model_weights_only,
         utc_timestamp,
     )
+    from .normalize import export_normalized_mesh
+    from .preflight import inspect_mesh_path
+    from .export_dataset_sample import package_dataset_sample
 
     # get training parameters
     args = _build_training_args(argv=argv, args=args, **overrides)
@@ -211,17 +247,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     utils = deps['utils']
     dataset = deps['dataset']
 
-    mesh_dir = os.path.dirname(os.path.abspath(args.data_path))
-    file_name = os.path.splitext(os.path.basename(args.data_path))[0]
-    if args.out_dir is None:
-        out_dir_root = mesh_dir
-    elif os.path.isabs(args.out_dir):
-        out_dir_root = args.out_dir
-    else:
-        out_dir_root = os.path.join(mesh_dir, args.out_dir)
-
-    out_dir = os.path.join(out_dir_root, file_name)
-    os.makedirs(out_dir, exist_ok=True)
+    mesh_dir, file_name, out_dir = _resolve_output_directory(args)
+    run_started_utc = utc_timestamp()
     if args.checkpoint_dir is None:
         checkpoint_dir = os.path.join(out_dir, "checkpoints")
     elif os.path.isabs(args.checkpoint_dir):
@@ -233,6 +260,39 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
     # set up logging
     log_file = utils.setup_out_dir_only_log(out_dir, args)
+    input_dir = os.path.join(out_dir, "input")
+    mesh_report_path = os.path.join(out_dir, "mesh_quality_report.json")
+
+    preflight_report, prepared_mesh = inspect_mesh_path(args.data_path)
+    if prepared_mesh is None:
+        with open(mesh_report_path, "w", encoding="utf-8") as handle:
+            json.dump(preflight_report.to_dict(), handle, indent=2, sort_keys=True)
+        log_file.close()
+        raise ValueError(
+            "Mesh preflight rejected '{}': {}".format(
+                args.data_path,
+                preflight_report.skip_reason or "input mesh is not trainable",
+            )
+        )
+
+    normalized_export = export_normalized_mesh(prepared_mesh, input_dir)
+    preflight_report.artifacts = {
+        "normalized_mesh_obj": normalized_export.obj_path,
+        "normalized_mesh_ply": normalized_export.ply_path,
+    }
+    preflight_report.normalization = normalized_export.metadata.to_dict()
+    with open(mesh_report_path, "w", encoding="utf-8") as handle:
+        json.dump(preflight_report.to_dict(), handle, indent=2, sort_keys=True)
+    utils.log_string(
+        "Mesh preflight: status={} faces={} vertices={} normalized_mesh={}".format(
+            preflight_report.status,
+            preflight_report.metrics.face_count,
+            preflight_report.metrics.vertex_count,
+            normalized_export.obj_path,
+        ),
+        log_file,
+    )
+    training_mesh_path = normalized_export.obj_path
 
     device = _resolve_device(torch, args.device)
     if device == 'cuda':
@@ -242,7 +302,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
     # get data loaders
     utils.same_seed(args.seed, deterministic=not args.fast_nondeterministic)
-    train_set = dataset.ReconDataset(args.data_path, args.n_points, args.n_samples, args.grid_res)
+    train_set = dataset.ReconDataset(training_mesh_path, args.n_points, args.n_samples, args.grid_res)
     static_batch = train_set.get_static_batch()
 
     train_dataloader = torch.utils.data.DataLoader(
@@ -337,10 +397,10 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
     ##################################################################################
     # get the vertices neighbors of the mesh
-    vertex_neighbors = utils.get_sample_vers_neighbors_for_face_center_points_or_vertices(args.data_path)
+    vertex_neighbors = utils.get_sample_vers_neighbors_for_face_center_points_or_vertices(training_mesh_path)
     vertex_neighbors_list = utils.calculate_same_neighbors_verts(vertex_neighbors)
     ###################################################################################
-    axis_angle_R_mat_list = utils.get_rotation_matrix(vertex_neighbors_list, vertex_neighbors, args.data_path)
+    axis_angle_R_mat_list = utils.get_rotation_matrix(vertex_neighbors_list, vertex_neighbors, training_mesh_path)
 
     try:
         criterion = MorseLoss(weights=args.loss_weights, loss_type=args.loss_type, div_decay=args.morse_decay,
@@ -394,6 +454,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     checkpoint_path = None
     best_checkpoint_path = None
     weights_path = None
+    manifest_path = None
     best_loss = min(loss_history) if loss_history else float('inf')
     last_epoch = start_epoch
     last_batch_idx = start_batch_idx
@@ -637,6 +698,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             break
 
     total_elapsed = time.perf_counter() - run_start_time
+    run_finished_utc = utc_timestamp()
     if stopped_early:
         utils.log_string("Training stopped early in {}".format(_format_duration(total_elapsed)), log_file)
     else:
@@ -656,6 +718,33 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         )
     log_path = log_file.name
     log_file.close()
+    if getattr(args, "dataset_root", None):
+        from neurcross import __version__ as neurcross_version
+
+        command_name = "generate-label" if getattr(args, "sample_id", None) else "train-quad-mesh"
+        training_command = "python -m neurcross {} {}".format(
+            command_name,
+            " ".join(argv or []),
+        ).strip()
+        manifest_path = package_dataset_sample(
+            output_dir=out_dir,
+            sample_id=args.sample_id,
+            mesh_name=file_name,
+            source_mesh_path=args.data_path,
+            normalized_mesh_ply_path=normalized_export.ply_path,
+            preflight_report=preflight_report.to_dict(),
+            normalization=normalized_export.metadata.to_dict(),
+            args_dict=dict(vars(args)),
+            device=device,
+            log_path=log_path,
+            started_at_utc=run_started_utc,
+            finished_at_utc=run_finished_utc,
+            elapsed_seconds=total_elapsed,
+            neurcross_version=neurcross_version,
+            training_command=training_command,
+            stopped_early=stopped_early,
+            stop_summary=stop_summary,
+        )
     return TrainingResult(
         args=args,
         output_dir=out_dir,
@@ -667,6 +756,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         checkpoint_path=checkpoint_path,
         best_checkpoint_path=best_checkpoint_path,
         weights_path=weights_path,
+        manifest_path=manifest_path,
     )
 
 

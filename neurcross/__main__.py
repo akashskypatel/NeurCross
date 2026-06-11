@@ -26,16 +26,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     convert.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
 
+    generate = subparsers.add_parser(
+        "generate-label",
+        help="Generate a dataset sample package for one mesh.",
+    )
+    generate.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+
     parser.epilog = (
         "High-level functionality:\n"
         "  train-quad-mesh     Train NeurCross on a mesh to produce cross-field snapshots.\n"
         "  train               Alias for train-quad-mesh.\n"
-        "  convert  Convert cross-field, .rosy, or .rawfield files.\n\n"
+        "  convert             Convert cross-field, .rosy, or .rawfield files.\n"
+        "  generate-label      Generate a dataset sample package from one mesh.\n\n"
         "Examples:\n"
         "  python -m neurcross --help\n"
         "  python -m neurcross train-quad-mesh --help\n"
         "  python -m neurcross train --help\n"
-        "  python -m neurcross convert --help"
+        "  python -m neurcross convert --help\n"
+        "  python -m neurcross generate-label --help"
     )
     return parser
 
@@ -61,6 +69,13 @@ def main() -> None:
 
         sys.argv = ["neurcross-convert", *command_args]
         convert_main()
+        return
+
+    if command == "generate-label":
+        from quad_mesh.generate_label import main as generate_label_main
+
+        sys.argv = ["neurcross-generate-label", *command_args]
+        generate_label_main(command_args)
         return
 
     parser.error(f"unknown command: {command}")

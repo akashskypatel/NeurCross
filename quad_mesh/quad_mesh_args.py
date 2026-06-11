@@ -15,6 +15,23 @@ def add_args(parser):
         default=None,
         help='optional output directory; if omitted, outputs are written beside the input mesh',
     )
+    parser.add_argument(
+        '--dataset_root',
+        type=str,
+        default=None,
+        help='optional dataset output root used by generate-label; when set, outputs are written under dataset_root/sample_id',
+    )
+    parser.add_argument(
+        '--sample_id',
+        type=str,
+        default=None,
+        help='optional dataset sample identifier used by generate-label',
+    )
+    parser.add_argument(
+        '--overwrite',
+        action='store_true',
+        help='allow writing into an existing dataset sample directory when using generate-label',
+    )
     parser.add_argument('--model_name', type=str, default='model', help='trained model name')
     parser.add_argument('--seed', type=int, default=3627473, help='random seed')
     parser.add_argument(

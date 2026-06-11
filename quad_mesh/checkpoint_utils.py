@@ -48,6 +48,12 @@ def capture_random_state() -> dict[str, Any]:
     return state
 
 
+def _cpu_rng_tensor(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return value.detach().to(device="cpu", dtype=torch.uint8)
+    return value
+
+
 def restore_random_state(state: Optional[dict[str, Any]]) -> None:
     if not state:
         return
@@ -56,9 +62,9 @@ def restore_random_state(state: Optional[dict[str, Any]]) -> None:
     if "numpy" in state:
         np.random.set_state(state["numpy"])
     if "torch" in state:
-        torch.set_rng_state(state["torch"])
+        torch.set_rng_state(_cpu_rng_tensor(state["torch"]))
     if "torch_cuda" in state and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["torch_cuda"])
+        torch.cuda.set_rng_state_all([_cpu_rng_tensor(item) for item in state["torch_cuda"]])
 
 
 def _checkpoint_to_payload(checkpoint: TrainingCheckpoint) -> dict[str, Any]:
