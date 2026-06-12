@@ -245,3 +245,93 @@ def test_generate_label_setup_failure_captures_failed_artifacts(tmp_path, monkey
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["sample_state"] == "failed"
     assert manifest["quality"]["accepted"] is False
+
+
+def test_generate_label_batch_outputs_can_build_dataset_index_and_splits(tmp_path, monkeypatch):
+    from quad_mesh.dataset_splits import build_split_manifest, load_dataset_index, write_dataset_index
+    from quad_mesh.generate_label import main as generate_label_main
+
+    mesh_a = tmp_path / "a.obj"
+    mesh_b = tmp_path / "b.obj"
+    mesh_c = tmp_path / "c.obj"
+    for mesh_path in (mesh_a, mesh_b, mesh_c):
+        mesh_path.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+
+    dataset_root = tmp_path / "dataset"
+
+    def _fake_train(*, args, allow_multiprocessing_workers):
+        mesh_name = os.path.basename(args.data_path)
+        if mesh_name == "a.obj":
+            destination = "accepted"
+            sample_state = "completed"
+            accepted = True
+            source_dataset = "family-a"
+        elif mesh_name == "b.obj":
+            destination = "quarantine"
+            sample_state = "completed"
+            accepted = False
+            source_dataset = "family-b"
+        else:
+            destination = "failed"
+            sample_state = "failed"
+            accepted = False
+            source_dataset = "family-c"
+
+        sample_dir = Path(args.dataset_root) / destination / args.sample_id
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "sample_id": args.sample_id,
+            "sample_state": sample_state,
+            "source": {
+                "source_mesh_sha256": f"hash-{mesh_name}",
+                "source_dataset": source_dataset,
+                "source_mesh_path": f"input/{mesh_name}",
+            },
+            "quality": {"accepted": accepted},
+        }
+        manifest_path = sample_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        class _Result:
+            pass
+
+        result = _Result()
+        result.output_dir = str(sample_dir)
+        result.manifest_path = str(manifest_path)
+        if destination == "failed":
+            raise RuntimeError("forced-generated-failure")
+        return result
+
+    monkeypatch.setattr("quad_mesh.train_quad_mesh.train_crossfield", _fake_train)
+
+    generate_label_main(
+        [
+            "--data_path",
+            str(tmp_path),
+            "--dataset_root",
+            str(dataset_root),
+        ]
+    )
+
+    index_path = write_dataset_index(str(dataset_root))
+    assert Path(index_path).exists()
+    index_payload = json.loads(Path(index_path).read_text(encoding="utf-8"))
+    assert len(index_payload["entries"]) == 3
+
+    entries = load_dataset_index(str(dataset_root))
+    assert {entry["destination"] for entry in entries} == {"accepted", "quarantine", "failed"}
+
+    split_manifest = build_split_manifest(
+        str(dataset_root),
+        seed=5,
+        train_ratio=1.0,
+        validation_ratio=0.0,
+        test_ratio=0.0,
+        ood_source_datasets=["family-b"],
+    )
+    assert len(split_manifest["splits"]["train"]) == 1
+    assert len(split_manifest["splits"]["quarantine"]) == 1
+    assert len(split_manifest["splits"]["failed"]) == 1
+    assert split_manifest["splits"]["ood_test"] == []
+    assert split_manifest["counts"]["quarantine"] == 1
+    assert split_manifest["counts"]["failed"] == 1

@@ -68,6 +68,8 @@ The package exposes a high-level module entry point:
 python -m neurcross --help
 python -m neurcross train-quad-mesh --help
 python -m neurcross generate-label --help
+python -m neurcross build-dataset-index --help
+python -m neurcross split-dataset --help
 ```
 
 ## Using NeurCross From Another Python Module
@@ -240,6 +242,11 @@ The training entry point accepts the following arguments.
 | `--save_best_by` | `val_field_score` | Chooses which field label becomes the canonical packaged output. `train_field_score` preserves the original training-score behavior. `val_field_score` compares fixed validation-batch scores between the train-best checkpoint and the final model. `quad_score` is intentionally deferred until downstream NeuralQuad quad metrics exist. |
 | `--eval_interval_steps` | `0` | Runs fixed validation-batch evaluation every `N` training steps and appends entries to `metrics/validation_history.json`. `0` disables in-loop validation and still writes final validation metrics. |
 | `--export_interval_steps` | `500` | Exports intermediate cross-field snapshots every `N` training steps in addition to final export. |
+| `--curriculum` | `none` | Optional staged loss-weight schedule. `default`, `cad`, and `organic` apply geometry, alignment, and smoothness stages across global training steps. |
+| `--schedule_unit` | `step` | Curriculum scheduling unit. The current implementation uses global training steps. |
+| `--geometry_stage_ratio` | `0.2` | Fraction of total training steps reserved for geometry stabilization when curriculum is enabled. |
+| `--alignment_stage_ratio` | `0.6` | Fraction of total training steps reserved for field-alignment emphasis when curriculum is enabled. |
+| `--smooth_stage_ratio` | `0.2` | Fraction of total training steps reserved for smoothness cleanup when curriculum is enabled. |
 | `--keep_last_n_checkpoints` | `3` | Number of recent periodic `checkpoint_step_*.pt` files to keep. Set to `0` to keep all periodic checkpoints. |
 | `--num_workers` | `4` | Number of `DataLoader` worker processes used for training batches. |
 | `--persistent_workers` | disabled | Keeps `DataLoader` workers alive across epochs to reduce worker startup overhead. |
@@ -287,6 +294,104 @@ Sampling notes:
 - The current default is `mixed`, which combines uniform, near-surface, and feature-biased off-manifold samples.
 - `mixed` mode uses deterministic weighted allocation across uniform, near-surface, and feature-biased samples.
 - Dataset sampling is now deterministic for a fixed `--seed`, with epoch-specific variation driven through the training loop.
+
+## Dataset Label Packages and Splits
+
+`python -m neurcross generate-label` wraps preflight, normalization, training, validation export, and dataset packaging around a single mesh run.
+
+Typical package layout:
+
+```text
+<dataset_root>\
+  accepted\
+    <sample_id>\
+      manifest.json
+      input\
+      fields\
+      geometry\
+      metrics\
+      logs\
+  quarantine\
+  failed\
+```
+
+The destination is driven by the generated quality report:
+
+- `accepted/`: completed samples that pass the configured gate
+- `quarantine/`: completed samples that are usable for inspection but fail the clean-dataset gate
+- `failed/`: setup or training failures that still produced a diagnostic manifest
+
+Preflight status classes:
+
+- `accepted_for_training`: the mesh is usable as-is or only needed conservative cleanup such as dropping invalid or degenerate faces
+- `needs_repair`: the mesh is still processable, but the report recorded warnings or repairs you may want to handle upstream before trusting the label
+- `skip`: the mesh is not trainable under the current policy; NeurCross writes diagnostics and a skipped manifest instead of starting optimization
+
+Optional geometry-supervision artifacts:
+
+- `sdf/sdf_samples.npz` is written when `--export_sdf_samples` is enabled
+- the NPZ contains `query_points`, `sdf_values`, `tsdf_values`, `sample_type`, `sign_reliability`, normalization metadata, and `mesh_is_watertight`
+- for non-watertight meshes, NeurCross falls back to unsigned distance behavior and marks sign reliability accordingly instead of pretending the sign is trustworthy
+
+Quality grades:
+
+- `A`: clean field label that passed the configured gate
+- `B`: acceptable field with warnings
+- `C`: completed run routed to `quarantine/`
+- `D`: skipped or failed run, typically routed to `failed/` or retained only for diagnostics
+
+Example label-generation command:
+
+```powershell
+python -m neurcross generate-label `
+  --data_path D:\meshes\cube.obj `
+  --dataset_root D:\datasets\neurcross `
+  --sample_id cube-baseline `
+  --device cuda `
+  --nonmnfld_sample_type mixed `
+  --save_best_by val_field_score `
+  --export_sdf_samples `
+  --export_features `
+  --quality_gate default
+```
+
+After samples exist, NeurCross can build a dataset index and deterministic shape-level splits:
+
+```powershell
+python -m neurcross build-dataset-index `
+  --dataset_root D:\datasets\neurcross `
+  --validate_artifacts
+```
+
+```powershell
+python -m neurcross split-dataset `
+  --dataset_root D:\datasets\neurcross `
+  --seed 17 `
+  --train_ratio 0.8 `
+  --validation_ratio 0.1 `
+  --test_ratio 0.1
+```
+
+`split-dataset` groups by source mesh hash so shape variants do not cross the clean train, validation, and test splits. `quarantine` and `failed` samples are tracked separately and are not mixed into the clean accepted splits.
+
+Optional OOD holdout is supported at the source-dataset-family level:
+
+```powershell
+python -m neurcross split-dataset `
+  --dataset_root D:\datasets\neurcross `
+  --ood_source_dataset abc_parts `
+  --ood_source_dataset mechcad_eval
+```
+
+or:
+
+```powershell
+python -m neurcross split-dataset `
+  --dataset_root D:\datasets\neurcross `
+  --ood_ratio 0.25
+```
+
+`--ood_source_dataset` explicitly holds out one or more `source.source_dataset` families into `ood_test`. `--ood_ratio` randomly selects that fraction of distinct source-dataset families, using the provided `--seed`. If no `source_dataset` metadata is present, OOD assignment stays disabled.
 
 ## GPU Memory Guards
 

@@ -74,6 +74,50 @@ def test_build_split_manifest_tracks_quarantine_and_failed(tmp_path):
     assert manifest["splits"]["ood_test"] == []
 
 
+def test_build_split_manifest_can_hold_out_explicit_ood_source_dataset(tmp_path):
+    from quad_mesh.dataset_splits import build_split_manifest
+
+    _write_manifest(tmp_path, "accepted", "sample-a", "hash-a", source_dataset="set-1")
+    _write_manifest(tmp_path, "accepted", "sample-b", "hash-b", source_dataset="set-2")
+    _write_manifest(tmp_path, "accepted", "sample-c", "hash-c", source_dataset="set-2")
+
+    manifest = build_split_manifest(
+        str(tmp_path),
+        seed=7,
+        train_ratio=0.5,
+        validation_ratio=0.5,
+        test_ratio=0.0,
+        ood_source_datasets=["set-2"],
+    )
+
+    assert manifest["ood_policy"]["policy"] == "explicit_source_dataset"
+    assert manifest["ood_policy"]["selected_source_datasets"] == ["set-2"]
+    assert manifest["splits"]["ood_test"] == ["sample-b", "sample-c"]
+    assert "sample-b" not in manifest["splits"]["train"]
+    assert "sample-c" not in manifest["splits"]["validation"]
+
+
+def test_split_dataset_parser_accepts_ood_controls():
+    from quad_mesh.dataset_splits import split_dataset_parser
+
+    parser = split_dataset_parser()
+    args = parser.parse_args(
+        [
+            "--dataset_root",
+            "dataset",
+            "--ood_ratio",
+            "0.25",
+            "--ood_source_dataset",
+            "abc",
+            "--ood_source_dataset",
+            "def",
+        ]
+    )
+
+    assert args.ood_ratio == 0.25
+    assert args.ood_source_dataset == ["abc", "def"]
+
+
 def test_neurcross_main_parser_includes_dataset_split_commands():
     from neurcross.__main__ import build_parser
 

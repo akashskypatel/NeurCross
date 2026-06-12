@@ -57,6 +57,53 @@ def group_index_by_shape_identity(entries: list[dict[str, object]]) -> dict[str,
     return grouped
 
 
+def _resolve_ood_entries(
+    entries: list[dict[str, object]],
+    *,
+    seed: int,
+    ood_ratio: float,
+    ood_source_datasets: list[str] | None = None,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    explicit_datasets = [name for name in (ood_source_datasets or []) if name]
+    accepted_entries = [
+        entry for entry in entries
+        if entry.get("destination") == "accepted" and entry.get("sample_state", "completed") == "completed"
+    ]
+    accepted_by_dataset: dict[str, list[dict[str, object]]] = {}
+    for entry in accepted_entries:
+        dataset_name = entry.get("source_dataset")
+        if dataset_name:
+            accepted_by_dataset.setdefault(str(dataset_name), []).append(entry)
+
+    if explicit_datasets:
+        selected_dataset_names = sorted({name for name in explicit_datasets if name in accepted_by_dataset})
+        policy = "explicit_source_dataset"
+    elif ood_ratio > 0.0 and len(accepted_by_dataset) >= 2:
+        dataset_names = sorted(accepted_by_dataset)
+        rng = random.Random(int(seed))
+        rng.shuffle(dataset_names)
+        holdout_count = max(1, int(round(len(dataset_names) * float(ood_ratio))))
+        holdout_count = min(holdout_count, max(len(dataset_names) - 1, 0))
+        selected_dataset_names = sorted(dataset_names[:holdout_count])
+        policy = "ratio_source_dataset"
+    else:
+        selected_dataset_names = []
+        policy = "disabled"
+
+    ood_entries = []
+    if selected_dataset_names:
+        selected_set = set(selected_dataset_names)
+        ood_entries = [
+            entry for entry in accepted_entries
+            if entry.get("source_dataset") in selected_set
+        ]
+    return ood_entries, {
+        "policy": policy,
+        "requested_ratio": float(ood_ratio),
+        "selected_source_datasets": selected_dataset_names,
+    }
+
+
 def assign_grouped_splits(
     entries: list[dict[str, object]],
     *,
@@ -64,6 +111,7 @@ def assign_grouped_splits(
     train_ratio: float = 0.8,
     validation_ratio: float = 0.1,
     test_ratio: float = 0.1,
+    excluded_sample_ids: set[str] | None = None,
 ) -> dict[str, list[dict[str, object]]]:
     ratios = {
         "train": float(train_ratio),
@@ -80,6 +128,11 @@ def assign_grouped_splits(
         entry for entry in entries
         if entry.get("destination") == "accepted" and entry.get("sample_state", "completed") == "completed"
     ]
+    if excluded_sample_ids:
+        accepted_entries = [
+            entry for entry in accepted_entries
+            if entry["sample_id"] not in excluded_sample_ids
+        ]
     grouped = list(group_index_by_shape_identity(accepted_entries).items())
     rng = random.Random(int(seed))
     rng.shuffle(grouped)
@@ -109,14 +162,23 @@ def build_split_manifest(
     validation_ratio: float = 0.1,
     test_ratio: float = 0.1,
     validate_artifacts: bool = False,
+    ood_ratio: float = 0.0,
+    ood_source_datasets: list[str] | None = None,
 ) -> dict[str, object]:
     entries = load_dataset_index(dataset_root, validate_artifacts=validate_artifacts)
+    ood_entries, ood_policy = _resolve_ood_entries(
+        entries,
+        seed=seed,
+        ood_ratio=ood_ratio,
+        ood_source_datasets=ood_source_datasets,
+    )
     accepted_splits = assign_grouped_splits(
         entries,
         seed=seed,
         train_ratio=train_ratio,
         validation_ratio=validation_ratio,
         test_ratio=test_ratio,
+        excluded_sample_ids={entry["sample_id"] for entry in ood_entries},
     )
     quarantine_entries = [entry for entry in entries if entry.get("destination") == "quarantine"]
     failed_entries = [entry for entry in entries if entry.get("destination") == "failed"]
@@ -141,12 +203,13 @@ def build_split_manifest(
             "validation": float(validation_ratio),
             "test": float(test_ratio),
         },
+        "ood_policy": ood_policy,
         "source_datasets": source_datasets,
         "splits": {
             "train": [entry["sample_id"] for entry in accepted_splits["train"]],
             "validation": [entry["sample_id"] for entry in accepted_splits["validation"]],
             "test": [entry["sample_id"] for entry in accepted_splits["test"]],
-            "ood_test": [],
+            "ood_test": [entry["sample_id"] for entry in ood_entries],
             "quarantine": [entry["sample_id"] for entry in quarantine_entries],
             "failed": [entry["sample_id"] for entry in failed_entries],
         },
@@ -154,7 +217,7 @@ def build_split_manifest(
             "train": len(accepted_splits["train"]),
             "validation": len(accepted_splits["validation"]),
             "test": len(accepted_splits["test"]),
-            "ood_test": 0,
+            "ood_test": len(ood_entries),
             "quarantine": len(quarantine_entries),
             "failed": len(failed_entries),
             "excluded": len(excluded_entries),
@@ -191,6 +254,8 @@ def write_split_manifest(
     validation_ratio: float = 0.1,
     test_ratio: float = 0.1,
     validate_artifacts: bool = False,
+    ood_ratio: float = 0.0,
+    ood_source_datasets: list[str] | None = None,
 ) -> str:
     output_path = output_path or os.path.join(dataset_root, "dataset_splits.json")
     payload = build_split_manifest(
@@ -200,6 +265,8 @@ def write_split_manifest(
         validation_ratio=validation_ratio,
         test_ratio=test_ratio,
         validate_artifacts=validate_artifacts,
+        ood_ratio=ood_ratio,
+        ood_source_datasets=ood_source_datasets,
     )
     with open(output_path, "w", encoding="utf-8", newline="\n") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
@@ -223,6 +290,18 @@ def split_dataset_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train_ratio", type=float, default=0.8)
     parser.add_argument("--validation_ratio", type=float, default=0.1)
     parser.add_argument("--test_ratio", type=float, default=0.1)
+    parser.add_argument(
+        "--ood_ratio",
+        type=float,
+        default=0.0,
+        help="fraction of distinct source_dataset families to hold out as OOD; ignored when --ood_source_dataset is provided",
+    )
+    parser.add_argument(
+        "--ood_source_dataset",
+        action="append",
+        default=[],
+        help="explicit source_dataset family to place into ood_test; can be passed multiple times",
+    )
     parser.add_argument("--validate_artifacts", action="store_true")
     return parser
 
@@ -246,4 +325,6 @@ def split_dataset_main(argv: list[str] | None = None) -> str:
         validation_ratio=args.validation_ratio,
         test_ratio=args.test_ratio,
         validate_artifacts=args.validate_artifacts,
+        ood_ratio=args.ood_ratio,
+        ood_source_datasets=args.ood_source_dataset,
     )
