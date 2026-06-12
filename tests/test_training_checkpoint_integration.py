@@ -225,6 +225,8 @@ def test_generate_label_writes_manifest(tmp_path):
     _require_cuda_torch()
     import json
     import numpy as np
+    from quad_mesh.dataset_splits import write_dataset_index, write_split_manifest
+    from quad_mesh.export_dataset_sample import validate_manifest
     from quad_mesh.generate_label import main as generate_label_main
 
     mesh_path = _cube_mesh_path()
@@ -277,6 +279,7 @@ def test_generate_label_writes_manifest(tmp_path):
     manifest_path = sample_dir / "manifest.json"
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    validate_manifest(manifest, str(sample_dir))
     assert manifest["neurcross_dataset_schema_version"] == "0.1"
     assert manifest["artifact_type"] == "neurcross_per_mesh_label"
     assert manifest["sample_id"] == "cube-sample"
@@ -304,6 +307,7 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["training"]["args"]["save_best_by"] == "val_field_score"
     assert manifest["features"]["feature_mode"] == "auto"
     assert manifest["features"]["feature_constrained"] is True
+    assert manifest["training"]["curriculum"]["mode"] == "none"
     assert not (sample_dir / "geometry" / "mesh_geometry.npz").exists()
     assert (sample_dir / "sdf" / "sdf_samples.npz").exists()
     assert (sample_dir / "features" / "sharp_edges.npy").exists()
@@ -337,8 +341,39 @@ def test_generate_label_writes_manifest(tmp_path):
     )
     assert len(validation_history) >= 2
     assert all("score" in item for item in validation_history)
+    acceptance_report = json.loads(
+        (sample_dir / "metrics" / "acceptance_report.json").read_text(encoding="utf-8")
+    )
+    assert acceptance_report["accepted"] is True
+    assert acceptance_report["quality_grade"] in {"A", "B", "C"}
+    assert acceptance_report["recommended_destination"] == "accepted"
+    assert acceptance_report["preflight_status"] == "accepted_for_training"
+    assert "field_validity" in acceptance_report
+    assert "field_smoothness" in acceptance_report
+    assert "singularity_proxy" in acceptance_report
     sharp_edges = np.load(sample_dir / "features" / "sharp_edges.npy")
     assert sharp_edges.shape[1] == 2
+    dataset_index_path = write_dataset_index(str(dataset_root), validate_artifacts=True)
+    with open(dataset_index_path, "r", encoding="utf-8") as handle:
+        dataset_index = json.load(handle)
+    assert len(dataset_index["entries"]) == 1
+    assert dataset_index["entries"][0]["sample_id"] == "cube-sample"
+    split_manifest_path = write_split_manifest(
+        str(dataset_root),
+        seed=11,
+        train_ratio=1.0,
+        validation_ratio=0.0,
+        test_ratio=0.0,
+        validate_artifacts=True,
+    )
+    with open(split_manifest_path, "r", encoding="utf-8") as handle:
+        split_manifest = json.load(handle)
+    assert split_manifest["splits"]["train"] == ["cube-sample"]
+    assert split_manifest["splits"]["validation"] == []
+    assert split_manifest["splits"]["test"] == []
+    assert split_manifest["splits"]["ood_test"] == []
+    assert split_manifest["splits"]["quarantine"] == []
+    assert split_manifest["splits"]["failed"] == []
 
 
 def test_generate_label_quarantines_low_quality(tmp_path, monkeypatch):
