@@ -203,12 +203,17 @@ def get_rotation_matrix(vertex_neighbors_list, vertex_neighbors, mesh_path):
     axis_angle_R_mat_list = list()
 
     for i in range(len(vertex_neighbors_list)):
-        idx = np.array(vertex_neighbors_list[i])
+        idx = np.asarray(vertex_neighbors_list[i], dtype=np.int32)
 
         face_normals_i = np.expand_dims(face_normals[idx], axis=1)  # n x 1 x 3
 
         vertex_neighbors_i = [vertex_neighbors[z] for z in idx]
-        vertex_neighbors_i = np.array(vertex_neighbors_i)  # n x neighbors_size
+        neighbor_count = len(vertex_neighbors_i[0]) if vertex_neighbors_i else 0
+        if neighbor_count == 0:
+            axis_angle_R_mat_list.append(np.zeros((idx.shape[0], 0, 3, 3), dtype=np.float32))
+            continue
+
+        vertex_neighbors_i = np.asarray(vertex_neighbors_i, dtype=np.int32)  # n x neighbors_size
         face_normals_i_neighbor = face_normals[vertex_neighbors_i]
         #
         desired_rota_axis_direction = np.cross(face_normals_i_neighbor, face_normals_i)
