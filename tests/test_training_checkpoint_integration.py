@@ -300,11 +300,17 @@ def test_generate_label_writes_manifest(tmp_path):
     assert manifest["quality"]["validation_history_json"] == "metrics/validation_history.json"
     assert manifest["quality"]["quality_gate"] == "default"
     assert manifest["quality"]["recommended_destination"] == "accepted"
+    assert manifest["training"]["command"].startswith("python -m neurcross generate-label")
     assert manifest["training"]["python_version"]
     assert manifest["training"]["torch_version"]
     assert manifest["training"]["cuda_version"]
     assert manifest["training"]["platform"]
+    assert isinstance(manifest["training"]["args"], dict)
     assert manifest["training"]["args"]["save_best_by"] == "val_field_score"
+    assert manifest["training"]["args"]["sample_id"] == "cube-sample"
+    assert manifest["training"]["args"]["dataset_root"] == str(dataset_root)
+    git_commit = manifest["training"]["git_commit"]
+    assert git_commit is None or (len(git_commit) == 40 and all(ch in "0123456789abcdef" for ch in git_commit.lower()))
     assert manifest["features"]["feature_mode"] == "auto"
     assert manifest["features"]["feature_constrained"] is True
     assert manifest["training"]["curriculum"]["mode"] == "none"
@@ -351,6 +357,10 @@ def test_generate_label_writes_manifest(tmp_path):
     assert "field_validity" in acceptance_report
     assert "field_smoothness" in acceptance_report
     assert "singularity_proxy" in acceptance_report
+    with open(sample_dir / "logs" / "command.txt", "r", encoding="utf-8") as handle:
+        command_text = handle.read().strip()
+    assert command_text == manifest["training"]["command"]
+    assert "--sample_id cube-sample" in command_text
     sharp_edges = np.load(sample_dir / "features" / "sharp_edges.npy")
     assert sharp_edges.shape[1] == 2
     dataset_index_path = write_dataset_index(str(dataset_root), validate_artifacts=True)

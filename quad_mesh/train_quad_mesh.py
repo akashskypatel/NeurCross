@@ -2,6 +2,7 @@ import json
 import os
 import platform
 import shutil
+import subprocess
 import sys
 import time
 import warnings
@@ -158,6 +159,22 @@ def _build_training_command(args, argv):
         command_name,
         " ".join(argv or []),
     ).strip()
+
+
+def _detect_git_commit() -> str | None:
+    repo_hint = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        completed = subprocess.run(
+            ["git", "-C", repo_hint, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    commit = completed.stdout.strip()
+    return commit or None
 
 
 def _relocate_dataset_sample(args, out_dir: str, destination: str) -> str:
@@ -1332,7 +1349,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
             training_command = _build_training_command(args, argv)
             runtime_info = {
-                "git_commit": None,
+                "git_commit": _detect_git_commit(),
                 "python_version": sys.version.split()[0],
                 "torch_version": getattr(torch, "__version__", None),
                 "cuda_version": getattr(getattr(torch, "version", None), "cuda", None),

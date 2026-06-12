@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 
 def _write_manifest(dataset_root, destination, sample_id, source_hash, *, sample_state="completed", source_dataset=None):
     sample_dir = dataset_root / destination / sample_id
@@ -95,6 +97,46 @@ def test_build_split_manifest_can_hold_out_explicit_ood_source_dataset(tmp_path)
     assert manifest["splits"]["ood_test"] == ["sample-b", "sample-c"]
     assert "sample-b" not in manifest["splits"]["train"]
     assert "sample-c" not in manifest["splits"]["validation"]
+
+
+def test_build_split_manifest_can_hold_out_ood_by_ratio(tmp_path):
+    from quad_mesh.dataset_splits import build_split_manifest
+
+    _write_manifest(tmp_path, "accepted", "sample-a", "hash-a", source_dataset="set-1")
+    _write_manifest(tmp_path, "accepted", "sample-b", "hash-b", source_dataset="set-2")
+    _write_manifest(tmp_path, "accepted", "sample-c", "hash-c", source_dataset="set-3")
+
+    manifest = build_split_manifest(
+        str(tmp_path),
+        seed=5,
+        train_ratio=1.0,
+        validation_ratio=0.0,
+        test_ratio=0.0,
+        ood_ratio=0.34,
+    )
+
+    assert manifest["ood_policy"]["policy"] == "ratio_source_dataset"
+    assert len(manifest["ood_policy"]["selected_source_datasets"]) == 1
+    assert len(manifest["splits"]["ood_test"]) == 1
+    assert len(manifest["splits"]["train"]) == 2
+
+
+def test_load_dataset_index_can_validate_artifacts(tmp_path, monkeypatch):
+    import quad_mesh.dataset_splits as dataset_splits
+
+    _write_manifest(tmp_path, "accepted", "sample-a", "hash-a")
+    calls = []
+
+    def _fake_validate(manifest, output_dir):
+        calls.append((manifest["sample_id"], output_dir))
+
+    monkeypatch.setattr("quad_mesh.export_dataset_sample.validate_manifest", _fake_validate)
+
+    entries = dataset_splits.load_dataset_index(str(tmp_path), validate_artifacts=True)
+
+    assert len(entries) == 1
+    assert calls
+    assert calls[0][0] == "sample-a"
 
 
 def test_split_dataset_parser_accepts_ood_controls():

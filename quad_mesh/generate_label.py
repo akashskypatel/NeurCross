@@ -188,7 +188,11 @@ def main(argv: list[str] | None = None) -> None:
         summary_root = sample_args.dataset_root
 
         try:
-            result = train_crossfield(args=sample_args, allow_multiprocessing_workers=True)
+            result = train_crossfield(
+                args=sample_args,
+                argv=argv,
+                allow_multiprocessing_workers=True,
+            )
             manifest_path = result.manifest_path or _find_manifest_path(sample_args.dataset_root, sample_args.sample_id)
             manifest = {}
             if manifest_path and os.path.exists(manifest_path):
