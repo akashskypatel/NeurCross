@@ -545,6 +545,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         TrainingCheckpoint,
         capture_random_state,
         load_checkpoint,
+        load_model_weights,
         prune_old_checkpoints,
         restore_random_state,
         save_checkpoint,
@@ -797,7 +798,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     if args.load_path is not None and args.load_checkpoint is not None:
         raise ValueError("Use either --load_path for weights-only loading or --load_checkpoint for training resume, not both.")
     if args.load_path is not None:
-        net.load_state_dict(torch.load(args.load_path))
+        net.load_state_dict(load_model_weights(args.load_path, device=device))
         print('Loaded model from %s' % args.load_path)
     if summary is not None:
         try:
@@ -924,6 +925,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     next_global_step = initial_global_step
     current_global_step = initial_global_step
 
+    def _with_checkpoint_extension(stem: str) -> str:
+        return stem + (".safetensors" if args.checkpoint_format == "safetensors" else ".pt")
+
+    checkpoint_pattern = _with_checkpoint_extension("checkpoint_step_*")
+
     def _save_training_checkpoint(filename, epoch, batch_idx, next_global_step):
         early_stopper_state = None
         best_smooth_loss = best_loss
@@ -956,7 +962,12 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             early_stopper_state=early_stopper_state,
             random_state=capture_random_state(),
         )
-        return save_checkpoint(checkpoint, checkpoint_dir, filename=filename)
+        return save_checkpoint(
+            checkpoint,
+            checkpoint_dir,
+            filename=filename,
+            checkpoint_format=args.checkpoint_format,
+        )
 
     # For each epoch
     for epoch in range(start_epoch, derived_num_epochs):
@@ -1065,7 +1076,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             if improved_loss:
                 best_loss = current_loss_value
                 best_checkpoint_path = _save_training_checkpoint(
-                    "best_checkpoint.pt",
+                    _with_checkpoint_extension("best_checkpoint"),
                     epoch,
                     batch_idx,
                     global_step + 1,
@@ -1077,13 +1088,14 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             )
             if should_save_periodic:
                 checkpoint_path = _save_training_checkpoint(
-                    "checkpoint_step_{}.pt".format(global_step + 1),
+                    _with_checkpoint_extension("checkpoint_step_{}".format(global_step + 1)),
                     epoch,
                     batch_idx,
                     global_step + 1,
                 )
                 prune_old_checkpoints(
                     checkpoint_dir,
+                    pattern=checkpoint_pattern,
                     keep_last=args.keep_last_n_checkpoints,
                 )
 
@@ -1194,7 +1206,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                         log_file,
                     )
                     checkpoint_path = _save_training_checkpoint(
-                        "early_stop_checkpoint.pt",
+                        _with_checkpoint_extension("early_stop_checkpoint"),
                         epoch,
                         batch_idx,
                         global_step + 1,
@@ -1243,7 +1255,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         else:
             utils.log_string("Training finished in {}".format(_format_duration(total_elapsed)), log_file)
         final_checkpoint_path = _save_training_checkpoint(
-            "final_checkpoint.pt",
+            _with_checkpoint_extension("final_checkpoint"),
             last_epoch,
             last_batch_idx,
             next_global_step,
@@ -1253,7 +1265,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             weights_path = save_model_weights_only(
                 net.state_dict(),
                 checkpoint_dir,
-                filename="model_weights.pt",
+                filename="model_weights.safetensors" if args.checkpoint_format == "safetensors" else "model_weights.pt",
+                checkpoint_format=args.checkpoint_format,
             )
         log_path = log_file.name
         log_file.close()

@@ -15,6 +15,7 @@ license = "AGPL-3.0-only"
 
 dependencies = [
     "numpy",
+    "safetensors",
     "scipy",
     "torch",
     "torchinfo",

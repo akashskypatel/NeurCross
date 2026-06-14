@@ -12,6 +12,7 @@ from quad_mesh.checkpoint_utils import (
     TrainingCheckpoint,
     capture_random_state,
     load_checkpoint,
+    load_model_weights,
     prune_old_checkpoints,
     restore_random_state,
     save_checkpoint,
@@ -95,6 +96,22 @@ def test_weights_only_export(tmp_path):
     assert loaded.keys() == model.state_dict().keys()
 
 
+def test_weights_only_export_safetensors(tmp_path):
+    model = torch.nn.Linear(2, 1)
+    path = save_model_weights_only(
+        model.state_dict(),
+        str(tmp_path),
+        filename="model_weights.safetensors",
+        checkpoint_format="safetensors",
+    )
+    loaded = load_model_weights(path, device="cpu")
+
+    assert path.endswith(".safetensors")
+    assert loaded.keys() == model.state_dict().keys()
+    for key, value in loaded.items():
+        assert torch.allclose(value, model.state_dict()[key])
+
+
 def test_crossfield_export_uses_vec_extension(tmp_path):
     alpha = torch.tensor([[[1.0, 0.0, 0.0]]])
     beta = torch.tensor([[[0.0, 1.0, 0.0]]])
@@ -112,10 +129,11 @@ def test_crossfield_export_uses_vec_extension(tmp_path):
 
 
 def test_device_and_topology_memory_args_parse():
-    args = get_args(["--device", "cpu", "--max_topology_memory_gb", "0.25"])
+    args = get_args(["--device", "cpu", "--max_topology_memory_gb", "0.25", "--checkpoint_format", "safetensors"])
 
     assert args.device == "cpu"
     assert args.max_topology_memory_gb == pytest.approx(0.25)
+    assert args.checkpoint_format == "safetensors"
 
 
 def test_topology_memory_guard_raises_before_large_allocation():
@@ -259,3 +277,49 @@ def test_resume_state_matches_continuous_training_next_step(tmp_path):
     assert resumed_next_loss == pytest.approx(continuous_next_loss)
     for key, value in resumed_model.state_dict().items():
         assert torch.allclose(value, continuous_state[key])
+
+
+def test_checkpoint_round_trip_safetensors(tmp_path):
+    model = torch.nn.Linear(2, 1)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    loss = model(torch.ones(1, 2)).sum()
+    loss.backward()
+    optimizer.step()
+
+    metadata = CheckpointMetadata(
+        epoch=1,
+        batch_idx=2,
+        global_step=3,
+        total_epochs=5,
+        total_steps=25,
+        best_smooth_loss=0.125,
+        best_step=3,
+        loss_history=[0.25, 0.125],
+        args_dict=vars(Namespace(num_epochs=5, lr=1e-3, checkpoint_format="safetensors")),
+        timestamp=utc_timestamp(),
+        device="cpu",
+    )
+    checkpoint = TrainingCheckpoint(
+        model_state_dict=model.state_dict(),
+        optimizer_state_dict=optimizer.state_dict(),
+        metadata=metadata,
+        early_stopper_state={"history": [0.25, 0.125], "best_step": 3},
+        random_state=capture_random_state(),
+    )
+
+    path = save_checkpoint(
+        checkpoint,
+        str(tmp_path),
+        filename="resume.safetensors",
+        checkpoint_format="safetensors",
+    )
+    loaded = load_checkpoint(path, device="cpu")
+
+    assert path.endswith(".safetensors")
+    assert loaded.metadata.global_step == 3
+    assert loaded.metadata.batch_idx == 2
+    assert loaded.metadata.args_dict["checkpoint_format"] == "safetensors"
+    assert loaded.early_stopper_state["best_step"] == 3
+    assert loaded.optimizer_state_dict.keys() == checkpoint.optimizer_state_dict.keys()
+    for key, value in loaded.model_state_dict.items():
+        assert torch.allclose(value, checkpoint.model_state_dict[key])

@@ -161,6 +161,12 @@ def add_args(parser):
         help='path to checkpoint file to resume training',
     )
     parser.add_argument(
+        '--checkpoint_format',
+        choices=('pt', 'safetensors'),
+        default='pt',
+        help='serialization format for full checkpoints and weights-only exports',
+    )
+    parser.add_argument(
         '--export_weights_only',
         action='store_true',
         help='also export model_weights.pt for inference-only use',

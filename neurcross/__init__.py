@@ -19,7 +19,7 @@ def load_checkpoint(checkpoint_path, device="cpu"):
     return _load_checkpoint(checkpoint_path, device=device)
 
 
-def save_checkpoint(checkpoint, output_dir, filename="checkpoint.pt", save_best_only=False):
+def save_checkpoint(checkpoint, output_dir, filename="checkpoint.pt", save_best_only=False, checkpoint_format=None):
     from quad_mesh.checkpoint_utils import save_checkpoint as _save_checkpoint
 
     return _save_checkpoint(
@@ -27,13 +27,19 @@ def save_checkpoint(checkpoint, output_dir, filename="checkpoint.pt", save_best_
         output_dir,
         filename=filename,
         save_best_only=save_best_only,
+        checkpoint_format=checkpoint_format,
     )
 
 
-def save_model_weights_only(state_dict, output_dir, filename="model_weights.pt"):
+def save_model_weights_only(state_dict, output_dir, filename="model_weights.pt", checkpoint_format=None):
     from quad_mesh.checkpoint_utils import save_model_weights_only as _save_model_weights_only
 
-    return _save_model_weights_only(state_dict, output_dir, filename=filename)
+    return _save_model_weights_only(
+        state_dict,
+        output_dir,
+        filename=filename,
+        checkpoint_format=checkpoint_format,
+    )
 
 
 def load_trained_model(checkpoint_path, device="auto"):

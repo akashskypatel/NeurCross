@@ -235,6 +235,7 @@ The training entry point accepts the following arguments.
 | `--batch_size` | `1` | Mini-batch size used by the PyTorch `DataLoader`. Larger values require more GPU memory. |
 | `--load_path` | `None` | Optional weights-only path. If provided, the model weights are loaded before training starts. Do not combine with `--load_checkpoint`. |
 | `--save_checkpoint_interval` | `50` | Saves a full training checkpoint every N global training steps. Set to `0` to disable periodic checkpoints. |
+| `--checkpoint_format` | `pt` | Serialization format for full checkpoints and weights-only exports. Supported values are `pt` (PyTorch `.pt`) and `safetensors`. |
 | `--save_best_only` | disabled | Saves periodic checkpoints only when the current total loss improves. The separate `best_checkpoint.pt` is still maintained when loss improves. |
 | `--checkpoint_dir` | `None` | Directory for checkpoint files. If omitted, checkpoints are written to `<out_dir>\<mesh-name>\checkpoints\`. Relative paths are resolved under the mesh output directory. |
 | `--load_checkpoint` | `None` | Full checkpoint path used to resume training, including model weights, optimizer state, metadata, loss history, early-stopper state, and random state. |
