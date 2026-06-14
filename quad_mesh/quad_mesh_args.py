@@ -8,6 +8,23 @@ def _default_data_path():
     return candidate if os.path.exists(candidate) else None
 
 
+def _parse_device(value):
+    normalized = str(value).strip().lower()
+    if normalized in {'auto', 'cpu', 'cuda'}:
+        return normalized
+    if normalized.startswith('cuda:'):
+        try:
+            index = int(normalized.split(':', 1)[1])
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                "--device must be one of auto, cpu, cuda, or cuda:<index>"
+            ) from exc
+        if index < 0:
+            raise argparse.ArgumentTypeError("--device cuda index must be non-negative")
+        return f'cuda:{index}'
+    raise argparse.ArgumentTypeError("--device must be one of auto, cpu, cuda, or cuda:<index>")
+
+
 def add_args(parser):
     parser.add_argument(
         '--out_dir',
@@ -232,9 +249,9 @@ def add_args(parser):
                         help='allow faster nondeterministic CUDA/cuDNN behavior instead of fully deterministic seeding')
     parser.add_argument(
         '--device',
-        choices=('auto', 'cpu', 'cuda'),
+        type=_parse_device,
         default='auto',
-        help='training device: auto chooses CUDA when available, otherwise CPU',
+        help='training device: auto chooses CUDA when available, otherwise CPU; explicit devices like cuda:1 are supported',
     )
     parser.add_argument(
         '--max_topology_memory_gb',

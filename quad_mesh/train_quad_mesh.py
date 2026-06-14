@@ -54,13 +54,39 @@ def _format_duration(seconds: float) -> str:
 
 
 def _resolve_device(torch, requested_device):
+    requested_device = str(requested_device).strip().lower()
     if requested_device == 'cpu':
         return 'cpu'
     if requested_device == 'cuda':
         if not torch.cuda.is_available():
             raise RuntimeError("--device cuda was requested, but CUDA is not available.")
         return 'cuda'
+    if requested_device.startswith('cuda:'):
+        if not torch.cuda.is_available():
+            raise RuntimeError(f"--device {requested_device} was requested, but CUDA is not available.")
+        try:
+            device_index = int(requested_device.split(':', 1)[1])
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid CUDA device specifier: {requested_device}") from exc
+        device_count = torch.cuda.device_count()
+        if device_index >= device_count:
+            raise RuntimeError(
+                f"--device {requested_device} was requested, but only {device_count} CUDA device(s) are available."
+            )
+        return requested_device
     return 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
+def _is_cuda_device(device):
+    return str(device).startswith('cuda')
+
+
+def _cuda_device_index(device):
+    if not _is_cuda_device(device):
+        return None
+    if ':' not in str(device):
+        return 0
+    return int(str(device).split(':', 1)[1])
 
 
 def _raise_cuda_oom_guidance(exc, *, context):
@@ -293,7 +319,7 @@ def _evaluate_validation_metrics(
     global_step: int,
 ):
     torch = __import__("torch")
-    non_blocking = device == "cuda"
+    non_blocking = _is_cuda_device(device)
     was_training = net.training
     net.eval()
     try:
@@ -698,8 +724,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             log_file,
         )
         device = _resolve_device(torch, args.device)
-        if device == 'cuda':
-            torch.cuda.set_device(0)
+        if _is_cuda_device(device):
+            torch.cuda.set_device(_cuda_device_index(device))
             torch.cuda.init()
         utils.log_string("Training device: {}".format(device), log_file)
 
@@ -728,7 +754,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=args.num_workers,
-            pin_memory=(device == 'cuda'),
+            pin_memory=_is_cuda_device(device),
             persistent_workers=(args.persistent_workers and args.num_workers > 0),
         )
     except Exception as exc:
@@ -782,7 +808,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             log_file,
         )
 
-    non_blocking = (device == 'cuda')
+    non_blocking = _is_cuda_device(device)
     mnfld_points_base = torch.from_numpy(static_batch['points']).unsqueeze(0).to(device, non_blocking=non_blocking)
     mnfld_n_gt = torch.from_numpy(static_batch['mnfld_n']).unsqueeze(0).to(device, non_blocking=non_blocking)
     local_coord_u = torch.from_numpy(static_batch['local_coordinates_u']).unsqueeze(0).to(device, non_blocking=non_blocking)

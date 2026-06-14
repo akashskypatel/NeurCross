@@ -19,6 +19,7 @@ from quad_mesh.checkpoint_utils import (
     save_model_weights_only,
     utc_timestamp,
 )
+from quad_mesh.train_quad_mesh import _resolve_device
 from quad_mesh.quad_mesh_args import get_args
 from quad_mesh.inference import load_trained_model, predict_crossfield
 from utils.utils import save_only_crossField
@@ -134,6 +135,35 @@ def test_device_and_topology_memory_args_parse():
     assert args.device == "cpu"
     assert args.max_topology_memory_gb == pytest.approx(0.25)
     assert args.checkpoint_format == "safetensors"
+
+
+def test_explicit_cuda_device_arg_parses():
+    args = get_args(["--device", "cuda:1"])
+
+    assert args.device == "cuda:1"
+
+
+def test_resolve_device_accepts_explicit_cuda_index():
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 2,
+        )
+    )
+
+    assert _resolve_device(fake_torch, "cuda:1") == "cuda:1"
+
+
+def test_resolve_device_rejects_missing_cuda_index():
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 1,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="only 1 CUDA device"):
+        _resolve_device(fake_torch, "cuda:1")
 
 
 def test_topology_memory_guard_raises_before_large_allocation():
