@@ -7,6 +7,14 @@ import torch.nn as nn
 import utils.utils as utils
 
 
+def _detached_cpu_tensor(value):
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        return value.detach().to(device="cpu")
+    return value
+
+
 class CrossFieldExportManager:
     def __init__(self, out_dir, filename):
         self.output_dir = os.path.join(out_dir, 'save_crossField')
@@ -455,18 +463,18 @@ class MorseLoss_quad_mesh(nn.Module):
 
         if save_best or is_final_export or collect_metrics:
             metrics = self._build_metrics(
-                loss,
-                sdf_term,
-                inter_term,
-                eikonal_term,
-                morse_loss,
-                theta_hessian_term,
-                theta_neighbors_term,
-                vector_alpha,
-                vector_beta,
-                mnfld_n_gt,
-                neighbors_term,
-                neighbor_mask,
+                _detached_cpu_tensor(loss),
+                _detached_cpu_tensor(sdf_term),
+                _detached_cpu_tensor(inter_term),
+                _detached_cpu_tensor(eikonal_term),
+                _detached_cpu_tensor(morse_loss),
+                _detached_cpu_tensor(theta_hessian_term),
+                _detached_cpu_tensor(theta_neighbors_term),
+                _detached_cpu_tensor(vector_alpha),
+                _detached_cpu_tensor(vector_beta),
+                _detached_cpu_tensor(mnfld_n_gt),
+                _detached_cpu_tensor(neighbors_term),
+                _detached_cpu_tensor(neighbor_mask),
             )
             if (save_best or is_final_export) and self._export_manager is None:
                 self._export_manager = CrossFieldExportManager(
@@ -474,9 +482,11 @@ class MorseLoss_quad_mesh(nn.Module):
                     filename,
                 )
             if save_best or is_final_export:
+                vector_alpha_export = _detached_cpu_tensor(vector_alpha)
+                vector_beta_export = _detached_cpu_tensor(vector_beta)
                 export_crossfield_snapshot(
-                    vector_alpha,
-                    vector_beta,
+                    vector_alpha_export,
+                    vector_beta_export,
                     out_dir=out_dir,
                     filename=filename,
                     batch_idx=batch_idx,
