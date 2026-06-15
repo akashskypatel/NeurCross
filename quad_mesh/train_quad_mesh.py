@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import platform
@@ -235,6 +236,7 @@ def _capture_failed_dataset_run(
     run_start_time: float,
     log_file,
     failure_message: str,
+    training_metrics_csv_path: str | None = None,
 ):
     from .export_dataset_sample import package_failed_dataset_sample
     from .checkpoint_utils import utc_timestamp
@@ -259,6 +261,7 @@ def _capture_failed_dataset_run(
         quality_gate=getattr(args, "quality_gate", "default"),
         failure_reason=failure_message,
         log_path=log_path,
+        training_metrics_csv_path=training_metrics_csv_path,
     )
     failed_out_dir = _relocate_dataset_sample(args, out_dir, "failed")
     return (
@@ -300,6 +303,51 @@ def _write_validation_history_artifact(out_dir: str, history: list[dict]) -> str
         json.dump(history, handle, indent=2, sort_keys=True)
         handle.write("\n")
     return path
+
+
+def _flatten_metric_mapping(prefix: str, value, target: dict[str, object]) -> None:
+    if isinstance(value, dict):
+        for child_key, child_value in value.items():
+            next_prefix = "{}_{}".format(prefix, child_key) if prefix else str(child_key)
+            _flatten_metric_mapping(next_prefix, child_value, target)
+        return
+    if isinstance(value, (list, tuple)):
+        for index, child_value in enumerate(value):
+            next_prefix = "{}_{}".format(prefix, index) if prefix else str(index)
+            _flatten_metric_mapping(next_prefix, child_value, target)
+        return
+    target[prefix] = value
+
+
+def _append_training_metrics_csv(
+    csv_path: str,
+    row: dict[str, object],
+) -> None:
+    import math
+
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    sanitized_row: dict[str, object] = {}
+    for key, value in row.items():
+        if isinstance(value, float) and not math.isfinite(value):
+            sanitized_row[key] = str(value)
+        else:
+            sanitized_row[key] = value
+    existing_rows: list[dict[str, object]] = []
+    fieldnames: list[str] = []
+    if os.path.exists(csv_path):
+        with open(csv_path, "r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = list(reader.fieldnames or [])
+            existing_rows = list(reader)
+    for key in sanitized_row:
+        if key not in fieldnames:
+            fieldnames.append(key)
+    with open(csv_path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for existing_row in existing_rows:
+            writer.writerow({name: existing_row.get(name, "") for name in fieldnames})
+        writer.writerow({name: sanitized_row.get(name, "") for name in fieldnames})
 
 
 def _evaluate_validation_metrics(
@@ -770,6 +818,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 run_start_time=run_start_time,
                 log_file=log_file,
                 failure_message=failure_message,
+                training_metrics_csv_path=training_metrics_csv_path,
             )
             raise RuntimeError(
                 "Dataset-label setup failed; artifacts captured under {}".format(failed_out_dir)
@@ -945,6 +994,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     weights_path = None
     manifest_path = None
     sdf_samples_path = None
+    training_metrics_csv_path = os.path.join(out_dir, "metrics", "training_metrics.csv")
     best_loss = min(loss_history) if loss_history else float('inf')
     last_epoch = start_epoch
     last_batch_idx = start_batch_idx
@@ -995,208 +1045,252 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             checkpoint_format=args.checkpoint_format,
         )
 
-    # For each epoch
-    for epoch in range(start_epoch, derived_num_epochs):
-        if hasattr(train_set, "set_epoch"):
-            train_set.set_epoch(epoch)
-        for batch_idx, data in enumerate(train_dataloader):
-            if current_global_step >= total_steps:
-                break
-            if epoch == start_epoch and start_batch_idx >= 0 and batch_idx <= start_batch_idx:
-                continue
-            batch_start_time = time.perf_counter()
-            global_step = current_global_step
-            last_epoch = epoch
-            last_batch_idx = batch_idx
-            next_global_step = global_step + 1
-            current_global_step = next_global_step
-            curriculum_state = _build_curriculum_state(
-                args,
-                global_step=global_step,
-                total_steps=total_steps,
-                base_weights=criterion_base_weights,
-            )
-            _apply_curriculum_weights(
-                criterion,
-                base_weights=criterion_base_weights,
-                curriculum_state=curriculum_state,
-            )
-            if curriculum_state["stage_name"] != last_logged_curriculum_stage:
-                utils.log_string(
-                    "Curriculum stage: global_step={} stage={} weights={}".format(
-                        global_step,
-                        curriculum_state["stage_name"],
-                        curriculum_state["active_weights"],
-                    ),
-                    log_file,
+    try:
+        # For each epoch
+        for epoch in range(start_epoch, derived_num_epochs):
+            if hasattr(train_set, "set_epoch"):
+                train_set.set_epoch(epoch)
+            for batch_idx, data in enumerate(train_dataloader):
+                if current_global_step >= total_steps:
+                    break
+                if epoch == start_epoch and start_batch_idx >= 0 and batch_idx <= start_batch_idx:
+                    continue
+                batch_start_time = time.perf_counter()
+                global_step = current_global_step
+                last_epoch = epoch
+                last_batch_idx = batch_idx
+                next_global_step = global_step + 1
+                current_global_step = next_global_step
+                curriculum_state = _build_curriculum_state(
+                    args,
+                    global_step=global_step,
+                    total_steps=total_steps,
+                    base_weights=criterion_base_weights,
                 )
-                last_logged_curriculum_stage = curriculum_state["stage_name"]
-            export_interval_steps = max(int(getattr(args, "export_interval_steps", 500)), 0)
-            if batch_idx != 0 and (
-                (export_interval_steps > 0 and global_step > 0 and global_step % export_interval_steps == 0)
-                or batch_idx == steps_per_epoch - 1
-            ):
-                SAVE_BEST = True
-            is_final_batch = next_global_step >= total_steps
-
-            optimizer.zero_grad(set_to_none=True)
-
-            mnfld_points = mnfld_points_base.detach().clone()
-            nonmnfld_points = data['nonmnfld_points'].to(device, non_blocking=non_blocking)
-            near_points = data['near_points'].to(device, non_blocking=non_blocking)
-            mnfld_points.requires_grad_()
-            nonmnfld_points.requires_grad_()
-            near_points.requires_grad_()
-
-            features = torch.cat((mnfld_points, angle_feature_static), dim=-1)
-
-            try:
-                output_pred, mnfld_pts_theta_output_pred = net(nonmnfld_points, mnfld_points,
-                                                               near_points=near_points if args.morse_near else None,
-                                                               angle_features=features)
-
-                loss_dict = criterion(output_pred, mnfld_points, nonmnfld_points, mnfld_n_gt,
-                                      near_points=near_points if args.morse_near else None, batch_idx=global_step,
-                                      out_dir=out_dir, filename=file_name, save_best=SAVE_BEST,
-                                      mnfld_pts_theta_output_pred=mnfld_pts_theta_output_pred,
-                                      local_coord_u=local_coord_u, local_coord_v=local_coord_v,
-                                      is_final_export=is_final_batch)
-            except torch.cuda.OutOfMemoryError as exc:
-                _raise_cuda_oom_guidance(exc, context="forward/loss computation")
-
-            lr = optimizer.param_groups[0]['lr']
-
-            try:
-                loss_dict["loss"].backward()
-            except torch.cuda.OutOfMemoryError as exc:
-                _raise_cuda_oom_guidance(exc, context="backward pass")
-
-            if args.grad_clip_norm > 0:
-                torch.nn.utils.clip_grad_norm_(net.parameters(), args.grad_clip_norm)
-
-            SAVE_BEST = False
-            try:
-                optimizer.step()
-            except Exception as exc:
-                if getattr(args, "dataset_root", None):
-                    failure_message = "training_step_failed: {}: {}".format(type(exc).__name__, exc)
-                    utils.log_string("Dataset-label training failed: {}".format(failure_message), log_file)
-                    failed_out_dir, _failed_log_path, _failed_manifest_path = _capture_failed_dataset_run(
-                        args=args,
-                        argv=argv,
-                        out_dir=out_dir,
-                        preflight_report=preflight_report,
-                        run_started_utc=run_started_utc,
-                        run_start_time=run_start_time,
-                        log_file=log_file,
-                        failure_message=failure_message,
+                _apply_curriculum_weights(
+                    criterion,
+                    base_weights=criterion_base_weights,
+                    curriculum_state=curriculum_state,
+                )
+                if curriculum_state["stage_name"] != last_logged_curriculum_stage:
+                    utils.log_string(
+                        "Curriculum stage: global_step={} stage={} weights={}".format(
+                            global_step,
+                            curriculum_state["stage_name"],
+                            curriculum_state["active_weights"],
+                        ),
+                        log_file,
                     )
-                    raise RuntimeError(
-                        "Dataset-label training failed; artifacts captured under {}".format(failed_out_dir)
-                    ) from exc
-                raise
-            batch_elapsed = time.perf_counter() - batch_start_time
-            current_loss_value = float(loss_dict["loss"].detach().cpu().item())
-            loss_history.append(current_loss_value)
-            improved_loss = current_loss_value < best_loss
-            if improved_loss:
-                best_loss = current_loss_value
-                best_checkpoint_path = _save_training_checkpoint(
-                    _with_checkpoint_extension("best_checkpoint"),
-                    epoch,
-                    batch_idx,
-                    global_step + 1,
-                )
-            should_save_periodic = (
-                args.save_checkpoint_interval > 0
-                and (global_step + 1) % args.save_checkpoint_interval == 0
-                and (not args.save_best_only or improved_loss)
-            )
-            if should_save_periodic:
-                checkpoint_path = _save_training_checkpoint(
-                    _with_checkpoint_extension("checkpoint_step_{}".format(global_step + 1)),
-                    epoch,
-                    batch_idx,
-                    global_step + 1,
-                )
-                prune_old_checkpoints(
-                    checkpoint_dir,
-                    pattern=checkpoint_pattern,
-                    keep_last=args.keep_last_n_checkpoints,
-                )
+                    last_logged_curriculum_stage = curriculum_state["stage_name"]
+                export_interval_steps = max(int(getattr(args, "export_interval_steps", 500)), 0)
+                if batch_idx != 0 and (
+                    (export_interval_steps > 0 and global_step > 0 and global_step % export_interval_steps == 0)
+                    or batch_idx == steps_per_epoch - 1
+                ):
+                    SAVE_BEST = True
+                is_final_batch = next_global_step >= total_steps
+                should_log_metrics = (batch_idx % args.log_interval == 0)
 
-            # Output training stats
-            if batch_idx % args.log_interval == 0:
-                weights = criterion.weights
-                scalar_names = (
-                    "loss",
-                    "sdf_term",
-                    "inter_term",
-                    "eikonal_term",
-                    "morse_term",
-                    "theta_hessian_term",
-                    "theta_neighbors_term",
-                )
-                scalar_values = torch.stack([loss_dict[name].reshape(()) for name in scalar_names]).detach().cpu().tolist()
-                (
-                    loss_value,
-                    sdf_term_value,
-                    inter_term_value,
-                    eikonal_term_value,
-                    morse_term_value,
-                    theta_hessian_term_value,
-                    theta_neighbors_term_value,
-                ) = scalar_values
-                elapsed_total = time.perf_counter() - run_start_time
-                utils.log_string("Weights: {}, lr={:.3e}".format(weights, lr), log_file)
-                utils.log_string(
-                    "Timing: batch={} total_elapsed={}".format(
-                        _format_duration(batch_elapsed),
-                        _format_duration(elapsed_total),
-                    ),
-                    log_file,
-                )
-                utils.log_string('Epoch: {} [{:4d}/{} ({:.0f}%)] Loss: {:.5f} = L_Mnfld: {:.5f} + '
-                                 'L_NonMnfld: {:.5f} + L_Eknl: {:.5f} + L_Morse: {:.5f} + L_thetaHessian: {:.5f} + L_thetaNeighbor: {:.5f}'.format(
-                    epoch, batch_idx * args.batch_size, len(train_set), 100. * batch_idx / max(steps_per_epoch, 1),
-                    loss_value, weights[0] * sdf_term_value,
-                           weights[1] * inter_term_value,
-                           weights[3] * eikonal_term_value, weights[5] * morse_term_value,
-                           weights[2] * theta_hessian_term_value,
-                           weights[4] * theta_neighbors_term_value
-                ),
-                    log_file)
-                utils.log_string('Epoch: {} [{:4d}/{} ({:.0f}%)] Unweighted L_s : L_Mnfld: {:.5f} + '
-                                 'L_NonMnfld: {:.5f} + L_Eknl: {:.5f} + L_Morse: {:.5f} + L_thetaHessian: {:.5f} + L_thetaNeighbor: {:.5f}'.format(
-                    epoch, batch_idx * args.batch_size, len(train_set), 100. * batch_idx / max(steps_per_epoch, 1),
-                    sdf_term_value, inter_term_value,
-                    eikonal_term_value, morse_term_value,
-                    theta_hessian_term_value, theta_neighbors_term_value),
-                    log_file)
-                utils.log_string('', log_file)
+                optimizer.zero_grad(set_to_none=True)
 
-            if early_stopper is not None:
-                stop_summary = early_stopper.update(
-                    global_step,
-                    loss_dict["loss"].detach().cpu().item(),
-                    loss_dict["theta_neighbors_term"].detach().cpu().item(),
-                    loss_dict["theta_hessian_term"].detach().cpu().item(),
-                )
-                if stop_summary is not None:
-                    features_detached = features.detach()
-                    with torch.no_grad():
-                        _output_pred, theta_output = net(
-                            nonmnfld_points.detach(),
-                            mnfld_points.detach(),
-                            near_points=near_points.detach() if args.morse_near else None,
-                            angle_features=features_detached,
+                mnfld_points = mnfld_points_base.detach().clone()
+                nonmnfld_points = data['nonmnfld_points'].to(device, non_blocking=non_blocking)
+                near_points = data['near_points'].to(device, non_blocking=non_blocking)
+                mnfld_points.requires_grad_()
+                nonmnfld_points.requires_grad_()
+                near_points.requires_grad_()
+
+                features = torch.cat((mnfld_points, angle_feature_static), dim=-1)
+
+                try:
+                    output_pred, mnfld_pts_theta_output_pred = net(nonmnfld_points, mnfld_points,
+                                                                   near_points=near_points if args.morse_near else None,
+                                                                   angle_features=features)
+
+                    loss_dict = criterion(output_pred, mnfld_points, nonmnfld_points, mnfld_n_gt,
+                                          near_points=near_points if args.morse_near else None, batch_idx=global_step,
+                                          out_dir=out_dir, filename=file_name, save_best=SAVE_BEST,
+                                          mnfld_pts_theta_output_pred=mnfld_pts_theta_output_pred,
+                                          local_coord_u=local_coord_u, local_coord_v=local_coord_v,
+                                          is_final_export=is_final_batch,
+                                          collect_metrics=False)
+                except torch.cuda.OutOfMemoryError as exc:
+                    _raise_cuda_oom_guidance(exc, context="forward/loss computation")
+
+                lr = optimizer.param_groups[0]['lr']
+
+                try:
+                    loss_dict["loss"].backward()
+                except torch.cuda.OutOfMemoryError as exc:
+                    _raise_cuda_oom_guidance(exc, context="backward pass")
+
+                if args.grad_clip_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(net.parameters(), args.grad_clip_norm)
+
+                SAVE_BEST = False
+                try:
+                    optimizer.step()
+                except Exception as exc:
+                    if getattr(args, "dataset_root", None):
+                        failure_message = "training_step_failed: {}: {}".format(type(exc).__name__, exc)
+                        utils.log_string("Dataset-label training failed: {}".format(failure_message), log_file)
+                        failed_out_dir, _failed_log_path, _failed_manifest_path = _capture_failed_dataset_run(
+                            args=args,
+                            argv=argv,
+                            out_dir=out_dir,
+                            preflight_report=preflight_report,
+                            run_started_utc=run_started_utc,
+                            run_start_time=run_start_time,
+                            log_file=log_file,
+                            failure_message=failure_message,
+                            training_metrics_csv_path=training_metrics_csv_path,
                         )
-                        theta_output = theta_output.squeeze(0)
-                        vector_alpha = local_coord_u.squeeze(0) * torch.cos(theta_output) + local_coord_v.squeeze(0) * torch.sin(theta_output)
-                        vector_alpha = vector_alpha / (vector_alpha.norm(dim=-1, keepdim=True) + 1e-12)
-                        vector_beta = -local_coord_u.squeeze(0) * torch.sin(theta_output) + local_coord_v.squeeze(0) * torch.cos(theta_output)
-                        vector_beta = vector_beta / (vector_beta.norm(dim=-1, keepdim=True) + 1e-12)
-                        export_crossfield_snapshot(
+                        raise RuntimeError(
+                            "Dataset-label training failed; artifacts captured under {}".format(failed_out_dir)
+                        ) from exc
+                    raise
+                batch_elapsed = time.perf_counter() - batch_start_time
+                current_loss_value = float(loss_dict["loss"].detach().cpu().item())
+                loss_history.append(current_loss_value)
+                improved_loss = current_loss_value < best_loss
+                if improved_loss:
+                    best_loss = current_loss_value
+                    best_checkpoint_path = _save_training_checkpoint(
+                        _with_checkpoint_extension("best_checkpoint"),
+                        epoch,
+                        batch_idx,
+                        global_step + 1,
+                    )
+                should_save_periodic = (
+                    args.save_checkpoint_interval > 0
+                    and (global_step + 1) % args.save_checkpoint_interval == 0
+                    and (not args.save_best_only or improved_loss)
+                )
+                if should_save_periodic:
+                    checkpoint_path = _save_training_checkpoint(
+                        _with_checkpoint_extension("checkpoint_step_{}".format(global_step + 1)),
+                        epoch,
+                        batch_idx,
+                        global_step + 1,
+                    )
+                    prune_old_checkpoints(
+                        checkpoint_dir,
+                        pattern=checkpoint_pattern,
+                        keep_last=args.keep_last_n_checkpoints,
+                    )
+
+                # Output training stats
+                if should_log_metrics:
+                    weights = criterion.weights
+                    scalar_names = (
+                        "loss",
+                        "sdf_term",
+                        "inter_term",
+                        "eikonal_term",
+                        "morse_term",
+                        "theta_hessian_term",
+                        "theta_neighbors_term",
+                    )
+                    scalar_values = torch.stack([loss_dict[name].reshape(()) for name in scalar_names]).detach().cpu().tolist()
+                    (
+                        loss_value,
+                        sdf_term_value,
+                        inter_term_value,
+                        eikonal_term_value,
+                        morse_term_value,
+                        theta_hessian_term_value,
+                        theta_neighbors_term_value,
+                    ) = scalar_values
+                    elapsed_total = time.perf_counter() - run_start_time
+                    utils.log_string("Weights: {}, lr={:.3e}".format(weights, lr), log_file)
+                    utils.log_string(
+                        "Timing: batch={} total_elapsed={}".format(
+                            _format_duration(batch_elapsed),
+                            _format_duration(elapsed_total),
+                        ),
+                        log_file,
+                    )
+                    utils.log_string('Epoch: {} [{:4d}/{} ({:.0f}%)] Loss: {:.5f} = L_Mnfld: {:.5f} + '
+                                     'L_NonMnfld: {:.5f} + L_Eknl: {:.5f} + L_Morse: {:.5f} + L_thetaHessian: {:.5f} + L_thetaNeighbor: {:.5f}'.format(
+                        epoch, batch_idx * args.batch_size, len(train_set), 100. * batch_idx / max(steps_per_epoch, 1),
+                        loss_value, weights[0] * sdf_term_value,
+                               weights[1] * inter_term_value,
+                               weights[3] * eikonal_term_value, weights[5] * morse_term_value,
+                               weights[2] * theta_hessian_term_value,
+                               weights[4] * theta_neighbors_term_value
+                    ),
+                        log_file)
+                    utils.log_string('Epoch: {} [{:4d}/{} ({:.0f}%)] Unweighted L_s : L_Mnfld: {:.5f} + '
+                                     'L_NonMnfld: {:.5f} + L_Eknl: {:.5f} + L_Morse: {:.5f} + L_thetaHessian: {:.5f} + L_thetaNeighbor: {:.5f}'.format(
+                        epoch, batch_idx * args.batch_size, len(train_set), 100. * batch_idx / max(steps_per_epoch, 1),
+                        sdf_term_value, inter_term_value,
+                        eikonal_term_value, morse_term_value,
+                        theta_hessian_term_value, theta_neighbors_term_value),
+                        log_file)
+                    csv_row = {
+                                "pid": os.getpid(),
+                                "device": args.device,
+                                "sample_id": getattr(args, "sample_id", None),
+                                "data_path": getattr(args, "data_path", None),
+                                "epoch": epoch,
+                        "n_sample": batch_idx * args.batch_size,
+                        "batch_idx": batch_idx,
+                        "global_step": global_step,
+                        "progress_pct": 100.0 * batch_idx / max(steps_per_epoch, 1),
+                        "lr": float(lr),
+                        "batch_elapsed_seconds": float(batch_elapsed),
+                        "total_elapsed_seconds": float(elapsed_total),
+                        "weight_mnfld": float(weights[0]),
+                        "weight_nonmnfld": float(weights[1]),
+                        "weight_theta_hessian": float(weights[2]),
+                        "weight_eikonal": float(weights[3]),
+                        "weight_theta_neighbor": float(weights[4]),
+                        "weight_morse": float(weights[5]),
+                        "loss_total": float(loss_value),
+                        "loss_mnfld_weighted": float(weights[0] * sdf_term_value),
+                        "loss_nonmnfld_weighted": float(weights[1] * inter_term_value),
+                        "loss_eikonal_weighted": float(weights[3] * eikonal_term_value),
+                        "loss_morse_weighted": float(weights[5] * morse_term_value),
+                        "loss_theta_hessian_weighted": float(weights[2] * theta_hessian_term_value),
+                        "loss_theta_neighbor_weighted": float(weights[4] * theta_neighbors_term_value),
+                        "loss_mnfld_unweighted": float(sdf_term_value),
+                        "loss_nonmnfld_unweighted": float(inter_term_value),
+                        "loss_eikonal_unweighted": float(eikonal_term_value),
+                        "loss_morse_unweighted": float(morse_term_value),
+                        "loss_theta_hessian_unweighted": float(theta_hessian_term_value),
+                        "loss_theta_neighbor_unweighted": float(theta_neighbors_term_value),
+                        "curriculum_stage": curriculum_state.get("stage_name"),
+                        "curriculum_stage_index": curriculum_state.get("stage_index"),
+                        "save_best_candidate": bool(improved_loss),
+                        "is_final_batch": bool(is_final_batch),
+                    }
+                    if loss_dict.get("metrics"):
+                        _flatten_metric_mapping("", loss_dict["metrics"], csv_row)
+                    _append_training_metrics_csv(training_metrics_csv_path, csv_row)
+                    utils.log_string('', log_file)
+
+                if early_stopper is not None:
+                    stop_summary = early_stopper.update(
+                        global_step,
+                        loss_dict["loss"].detach().cpu().item(),
+                        loss_dict["theta_neighbors_term"].detach().cpu().item(),
+                        loss_dict["theta_hessian_term"].detach().cpu().item(),
+                    )
+                    if stop_summary is not None:
+                        features_detached = features.detach()
+                        with torch.no_grad():
+                            _output_pred, theta_output = net(
+                                nonmnfld_points.detach(),
+                                mnfld_points.detach(),
+                                near_points=near_points.detach() if args.morse_near else None,
+                                angle_features=features_detached,
+                            )
+                            theta_output = theta_output.squeeze(0)
+                            vector_alpha = local_coord_u.squeeze(0) * torch.cos(theta_output) + local_coord_v.squeeze(0) * torch.sin(theta_output)
+                            vector_alpha = vector_alpha / (vector_alpha.norm(dim=-1, keepdim=True) + 1e-12)
+                            vector_beta = -local_coord_u.squeeze(0) * torch.sin(theta_output) + local_coord_v.squeeze(0) * torch.cos(theta_output)
+                            vector_beta = vector_beta / (vector_beta.norm(dim=-1, keepdim=True) + 1e-12)
+                            export_crossfield_snapshot(
                             vector_alpha,
                             vector_beta,
                             out_dir=out_dir,
@@ -1240,38 +1334,59 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                     stopped_early = True
                     break
 
-            eval_interval_steps = max(int(getattr(args, "eval_interval_steps", 0)), 0)
-            if eval_interval_steps > 0 and next_global_step % eval_interval_steps == 0:
-                validation_metrics_step = _evaluate_validation_metrics(
-                    net=net,
-                    criterion=criterion,
-                    validation_batch=validation_batch,
-                    mnfld_points_base=mnfld_points_base,
-                    mnfld_n_gt=mnfld_n_gt,
-                    local_coord_u=local_coord_u,
-                    local_coord_v=local_coord_v,
-                    angle_feature_static=angle_feature_static,
-                    args=args,
-                    device=device,
-                    out_dir=out_dir,
-                    file_name=file_name,
-                    global_step=next_global_step,
-                )
-                validation_history.append(validation_metrics_step)
-                utils.log_string(
-                    "Validation: global_step={} score={:.6f}".format(
-                        next_global_step,
-                        float(validation_metrics_step["score"]),
-                    ),
-                    log_file,
-                )
+                eval_interval_steps = max(int(getattr(args, "eval_interval_steps", 0)), 0)
+                if eval_interval_steps > 0 and next_global_step % eval_interval_steps == 0:
+                    validation_metrics_step = _evaluate_validation_metrics(
+                        net=net,
+                        criterion=criterion,
+                        validation_batch=validation_batch,
+                        mnfld_points_base=mnfld_points_base,
+                        mnfld_n_gt=mnfld_n_gt,
+                        local_coord_u=local_coord_u,
+                        local_coord_v=local_coord_v,
+                        angle_feature_static=angle_feature_static,
+                        args=args,
+                        device=device,
+                        out_dir=out_dir,
+                        file_name=file_name,
+                        global_step=next_global_step,
+                    )
+                    validation_history.append(validation_metrics_step)
+                    utils.log_string(
+                        "Validation: global_step={} score={:.6f}".format(
+                            next_global_step,
+                            float(validation_metrics_step["score"]),
+                        ),
+                        log_file,
+                    )
 
-            criterion.update_morse_weight(global_step, total_steps,
-                                          args.decay_params)  # assumes batch size of 1
-        if stopped_early:
-            break
-        if current_global_step >= total_steps:
-            break
+                criterion.update_morse_weight(global_step, total_steps,
+                                              args.decay_params)  # assumes batch size of 1
+            if stopped_early:
+                break
+            if current_global_step >= total_steps:
+                break
+    except Exception as exc:
+        if "artifacts captured under" in str(exc):
+            raise
+        if getattr(args, "dataset_root", None):
+            failure_message = "training_loop_failed: {}: {}".format(type(exc).__name__, exc)
+            utils.log_string("Dataset-label training failed: {}".format(failure_message), log_file)
+            failed_out_dir, _failed_log_path, _failed_manifest_path = _capture_failed_dataset_run(
+                args=args,
+                argv=argv,
+                out_dir=out_dir,
+                preflight_report=preflight_report,
+                run_started_utc=run_started_utc,
+                run_start_time=run_start_time,
+                log_file=log_file,
+                failure_message=failure_message,
+                training_metrics_csv_path=training_metrics_csv_path,
+            )
+            raise RuntimeError(
+                "Dataset-label training failed; artifacts captured under {}".format(failed_out_dir)
+            ) from exc
+        raise
 
     try:
         total_elapsed = time.perf_counter() - run_start_time
@@ -1417,11 +1532,15 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 validation_samples_path=validation_samples_path,
                 validation_metrics_path=validation_metrics_path,
                 validation_history_path=validation_history_path,
+                training_metrics_csv_path=training_metrics_csv_path,
                 feature_artifacts=feature_artifacts,
                 selected_label=selected_label,
                 export_geometry_npz=getattr(args, "export_geometry_npz", True),
                 quality_gate=getattr(args, "quality_gate", "default"),
                 curriculum_state=curriculum_state,
+                latest_checkpoint_path=checkpoint_path,
+                best_checkpoint_path=best_checkpoint_path,
+                final_checkpoint_path=final_checkpoint_path,
             )
             with open(manifest_path, "r", encoding="utf-8") as handle:
                 manifest = json.load(handle)
@@ -1454,6 +1573,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 run_start_time=run_start_time,
                 log_file=log_file,
                 failure_message=failure_message,
+                training_metrics_csv_path=training_metrics_csv_path,
             )
             raise RuntimeError(
                 "Dataset-label finalization failed; artifacts captured under {}".format(failed_out_dir)

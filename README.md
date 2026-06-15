@@ -106,6 +106,16 @@ print(result.total_elapsed_seconds)
 print(result.stopped_early)
 ```
 
+Explicit GPU selection is supported from Python as well:
+
+```python
+result = neurcross.train_crossfield(
+    data_path=r"D:\path\to\mesh.ply",
+    out_dir=r"D:\path\to\output",
+    device="cuda:1",
+)
+```
+
 `train_crossfield(...)` returns a `TrainingResult` object with:
 
 - `args`
@@ -252,9 +262,9 @@ The training entry point accepts the following arguments.
 | `--num_workers` | `4` | Number of `DataLoader` worker processes used for training batches. |
 | `--persistent_workers` | disabled | Keeps `DataLoader` workers alive across epochs to reduce worker startup overhead. |
 | `--fast_nondeterministic` | disabled | Allows faster nondeterministic CUDA/cuDNN behavior instead of fully deterministic seeding. |
-| `--device` | `auto` | Training device. `auto` uses CUDA when available, otherwise CPU. Use `cpu` to avoid GPU memory pressure or `cuda` to require CUDA. |
+| `--device` | `auto` | Training device. `auto` uses CUDA when available, otherwise CPU. Use `cpu` to avoid GPU memory pressure, `cuda` to require CUDA, or `cuda:N` to target a specific GPU such as `cuda:0` or `cuda:1`. |
 | `--max_topology_memory_gb` | `8.0` | Preflight guard for cached mesh topology tensors. If the estimated cache exceeds this value, training stops before allocation with guidance. Set to `0` or a negative value to disable the guard. |
-| `--log_interval` | `10` | Number of batches between training log updates. |
+| `--log_interval` | `10` | Number of batches between training log updates. The same cadence is used for `metrics/training_metrics.csv`. |
 | `--init_type` | `siren` | Decoder initialization strategy. The help text lists `siren`, `geometric_sine`, `geometric_relu`, and `mfgi`. |
 | `--decoder_hidden_dim` | `256` | Width of the decoder hidden layers. |
 | `--decoder_n_hidden_layers` | `4` | Number of hidden layers used in the decoder network. |
@@ -311,6 +321,7 @@ Typical package layout:
       fields\
       geometry\
       metrics\
+      checkpoints\
       logs\
   quarantine\
   failed\
@@ -321,6 +332,15 @@ The destination is driven by the generated quality report:
 - `accepted/`: completed samples that pass the configured gate
 - `quarantine/`: completed samples that are usable for inspection but fail the clean-dataset gate
 - `failed/`: setup or training failures that still produced a diagnostic manifest
+
+Completed, quarantined, skipped, and failed packages can all retain resumable artifacts when they exist:
+
+- `metrics/training_metrics.csv`: per-log-interval scalar training metrics
+- `checkpoints/final_checkpoint.*`: final full checkpoint when training reached finalization
+- `checkpoints/best_checkpoint.*`: best-loss checkpoint when one was saved
+- `checkpoints/checkpoint_step_*.{pt,safetensors}`: periodic checkpoints that survived retention
+
+Failed runs are intended to be resumable. If a failed package reaches Hugging Face with a manifest and at least one checkpoint, the notebook can download that package on the next attempt and resume with `--load_checkpoint`.
 
 Preflight status classes:
 
@@ -348,13 +368,20 @@ python -m neurcross generate-label `
   --data_path D:\meshes\cube.obj `
   --dataset_root D:\datasets\neurcross `
   --sample_id cube-baseline `
-  --device cuda `
+  --device cuda:0 `
   --nonmnfld_sample_type mixed `
   --save_best_by val_field_score `
   --export_sdf_samples `
   --export_features `
-  --quality_gate default
+  --quality_gate default `
+  --checkpoint_format safetensors
 ```
+
+Generated metrics and logs:
+
+- `metrics/training_metrics.csv` writes one row every `--log_interval` batches
+- the CSV includes run identity, progress, learning rate, batch timing, elapsed time, current loss weights, weighted losses, and unweighted losses
+- the text log now prefixes entries with an identity tag so concurrent subprocesses and GPU-specific runs can be distinguished
 
 After samples exist, NeurCross can build a dataset index and deterministic shape-level splits:
 
@@ -415,9 +442,52 @@ python -m neurcross train-quad-mesh `
 
 `--device cpu` avoids CUDA OOM at the cost of runtime. `--max_topology_memory_gb` stops oversized topology allocations before they happen and prints guidance. If CUDA still runs out of memory during forward or backward computation, the training command raises a targeted error suggesting CPU fallback or mesh simplification.
 
+For fragmentation-heavy CUDA runtimes such as Colab or Kaggle notebooks, set:
+
+```powershell
+$env:PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
+```
+
+Some notebook environments instead honor:
+
+```powershell
+$env:PYTORCH_ALLOC_CONF = "expandable_segments:True"
+```
+
+The bundled notebook sets both before launching training subprocesses.
+
+## Multi-Device Training
+
+NeurCross does not implement single-run distributed training or `DataParallel`. One `generate-label` or `train-quad-mesh` process uses one device.
+
+What is supported:
+
+- explicit device targeting with `--device cuda:0`, `--device cuda:1`, and so on
+- multi-GPU throughput by running multiple independent training subprocesses pinned to different devices
+
+Examples:
+
+```powershell
+python -m neurcross generate-label `
+  --data_path D:\meshes\shape_a.obj `
+  --dataset_root D:\datasets\neurcross `
+  --sample_id shape-a `
+  --device cuda:0
+```
+
+```powershell
+python -m neurcross generate-label `
+  --data_path D:\meshes\shape_b.obj `
+  --dataset_root D:\datasets\neurcross `
+  --sample_id shape-b `
+  --device cuda:1
+```
+
+The bundled `NeurCross_Training.ipynb` uses this model. It can discover multiple visible GPUs, assign work per GPU, stagger workers to reduce claim contention, and launch one subprocess per GPU.
+
 ## Checkpoints, Resume, and Model Export
 
-Training now writes reusable PyTorch checkpoints that can be used to resume interrupted runs or load a trained model for inference. By default, checkpoint files are written under:
+Training now writes reusable full checkpoints that can be used to resume interrupted runs or load a trained model for inference. By default, checkpoint files are written under:
 
 ```text
 <out_dir>\<mesh-name>\checkpoints\
@@ -425,11 +495,13 @@ Training now writes reusable PyTorch checkpoints that can be used to resume inte
 
 The main files are:
 
-- `checkpoint_step_<N>.pt`: periodic full training checkpoints.
-- `best_checkpoint.pt`: the best-loss checkpoint seen so far.
-- `final_checkpoint.pt`: the final model and optimizer state at the end of the run.
-- `early_stop_checkpoint.pt`: the state saved immediately before an early-stop exit, when early stopping triggers.
-- `model_weights.pt`: weights-only export, written when `--export_weights_only` is set.
+- `checkpoint_step_<N>.pt` or `.safetensors`: periodic full training checkpoints.
+- `best_checkpoint.pt` or `.safetensors`: the best-loss checkpoint seen so far.
+- `final_checkpoint.pt` or `.safetensors`: the final model and optimizer state at the end of the run.
+- `early_stop_checkpoint.pt` or `.safetensors`: the state saved immediately before an early-stop exit, when early stopping triggers.
+- `model_weights.pt` or `.safetensors`: weights-only export, written when `--export_weights_only` is set.
+
+Dataset-label runs also write `metrics/training_metrics.csv` at the normal log cadence, and failed runs preserve any checkpoints they managed to produce so a later retry can resume from them.
 
 Each full checkpoint includes model weights, optimizer state, training metadata, loss history, random state, and early-stopper state when early stopping is enabled.
 
@@ -441,6 +513,7 @@ python -m neurcross train-quad-mesh `
   --out_dir D:\path\to\output `
   --num_epochs 20 `
   --save_checkpoint_interval 100 `
+  --checkpoint_format safetensors `
   --export_weights_only
 ```
 
@@ -450,11 +523,11 @@ Resume from a full checkpoint:
 python -m neurcross train-quad-mesh `
   --data_path D:\path\to\mesh.ply `
   --out_dir D:\path\to\output `
-  --load_checkpoint D:\path\to\output\mesh\checkpoints\final_checkpoint.pt `
+  --load_checkpoint D:\path\to\output\mesh\checkpoints\final_checkpoint.safetensors `
   --num_epochs 30
 ```
 
-Use `--load_path` only for loading a weights-only state dict. Use `--load_checkpoint` when you want a true training resume with optimizer and progress state restored.
+Use `--load_path` only for loading a weights-only state dict. Use `--load_checkpoint` when you want a true training resume with optimizer and progress state restored. For shared or untrusted environments, prefer `--checkpoint_format safetensors` over `.pt`.
 
 ## Fine-Tuning From a Previous Shape
 

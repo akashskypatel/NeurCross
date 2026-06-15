@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import glob
 import json
 import os
 import shutil
@@ -124,6 +125,12 @@ def _selected_source_suffix(selected_label: str) -> str:
     return selected_label
 
 
+def _copy_checkpoint_if_exists(source_path: str | None, destination_dir: str) -> str | None:
+    if not source_path or not os.path.exists(source_path):
+        return None
+    return _copy_if_exists(source_path, os.path.join(destination_dir, os.path.basename(source_path)))
+
+
 def _build_curriculum_manifest_entry(
     args_dict: dict[str, object],
     curriculum_state: dict[str, object] | None = None,
@@ -166,11 +173,15 @@ def build_manifest(
     validation_samples_path: str | None = None,
     validation_metrics_path: str | None = None,
     validation_history_path: str | None = None,
+    training_metrics_csv_path: str | None = None,
     feature_artifacts: dict[str, object] | None = None,
     selected_label: str = "best",
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
     curriculum_state: dict[str, object] | None = None,
+    latest_checkpoint_path: str | None = None,
+    best_checkpoint_path: str | None = None,
+    final_checkpoint_path: str | None = None,
 ) -> dict[str, object]:
     runtime_info = runtime_info or {}
     source_mesh_name = os.path.basename(source_mesh_path)
@@ -181,6 +192,7 @@ def build_manifest(
     geometry_dir = os.path.join(output_dir, "geometry")
     metrics_dir = os.path.join(output_dir, "metrics")
     logs_dir = os.path.join(output_dir, "logs")
+    checkpoints_dir = os.path.join(output_dir, "checkpoints")
 
     original_mesh_path = _copy_required(source_mesh_path, source_copy_path)
     normalized_ply_path = _copy_required(normalized_mesh_ply_path, normalized_mesh_copy)
@@ -213,6 +225,10 @@ def build_manifest(
         validation_history_path,
         os.path.join(metrics_dir, "validation_history.json"),
     )
+    training_metrics_csv_copy_path = _copy_or_keep(
+        training_metrics_csv_path,
+        os.path.join(metrics_dir, "training_metrics.csv"),
+    )
     feature_artifacts = feature_artifacts or {}
     features_dir = os.path.join(output_dir, "features")
     sharp_edges_copy_path = _copy_or_keep(
@@ -232,6 +248,9 @@ def build_manifest(
         os.path.join(features_dir, "face_feature_distance.npy"),
     )
     log_copy_path = _copy_required(log_path, os.path.join(logs_dir, "train.log"))
+    latest_checkpoint_copy_path = _copy_checkpoint_if_exists(latest_checkpoint_path, checkpoints_dir)
+    best_checkpoint_copy_path = _copy_checkpoint_if_exists(best_checkpoint_path, checkpoints_dir)
+    final_checkpoint_copy_path = _copy_checkpoint_if_exists(final_checkpoint_path, checkpoints_dir)
     command_txt_path = os.path.join(logs_dir, "command.txt")
     with open(command_txt_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(training_command)
@@ -328,6 +347,10 @@ def build_manifest(
             "face_feature_distance_npy": _rel(output_dir, face_feature_distance_copy_path),
             "log_path": _rel(output_dir, log_copy_path),
             "command_path": _rel(output_dir, command_txt_path),
+            "training_metrics_csv": _rel(output_dir, training_metrics_csv_copy_path),
+            "latest_checkpoint": _rel(output_dir, latest_checkpoint_copy_path),
+            "best_checkpoint": _rel(output_dir, best_checkpoint_copy_path),
+            "final_checkpoint": _rel(output_dir, final_checkpoint_copy_path),
         },
         "quality": {
             **quality,
@@ -358,6 +381,7 @@ def build_skipped_manifest(
     log_path: str | None = None,
     sample_state: str = "skipped",
     failure_reason: str | None = None,
+    training_metrics_csv_path: str | None = None,
 ) -> dict[str, object]:
     source_mesh_name = os.path.basename(source_mesh_path)
     source_copy_path = os.path.join(output_dir, "input", source_mesh_name)
@@ -371,6 +395,27 @@ def build_skipped_manifest(
     log_copy_path = None
     if log_path and os.path.exists(log_path):
         log_copy_path = _copy_required(log_path, os.path.join(output_dir, "logs", "train.log"))
+    training_metrics_csv_copy_path = _copy_or_keep(
+        training_metrics_csv_path,
+        os.path.join(output_dir, "metrics", "training_metrics.csv"),
+    )
+    checkpoints_dir = os.path.join(output_dir, "checkpoints")
+    checkpoint_candidates = sorted(glob.glob(os.path.join(checkpoints_dir, "checkpoint_step_*")))
+    latest_checkpoint_copy_path = _rel(output_dir, checkpoint_candidates[-1]) if checkpoint_candidates else None
+    best_checkpoint_path = _copy_if_exists(
+        os.path.join(checkpoints_dir, "best_checkpoint.safetensors"),
+        os.path.join(checkpoints_dir, "best_checkpoint.safetensors"),
+    ) or _copy_if_exists(
+        os.path.join(checkpoints_dir, "best_checkpoint.pt"),
+        os.path.join(checkpoints_dir, "best_checkpoint.pt"),
+    )
+    final_checkpoint_path = _copy_if_exists(
+        os.path.join(checkpoints_dir, "final_checkpoint.safetensors"),
+        os.path.join(checkpoints_dir, "final_checkpoint.safetensors"),
+    ) or _copy_if_exists(
+        os.path.join(checkpoints_dir, "final_checkpoint.pt"),
+        os.path.join(checkpoints_dir, "final_checkpoint.pt"),
+    )
 
     normalized_mesh_path = None
     normalized_mesh_sha256 = None
@@ -498,6 +543,10 @@ def build_skipped_manifest(
             "face_feature_distance_npy": None,
             "log_path": _rel(output_dir, log_copy_path),
             "command_path": _rel(output_dir, command_txt_path),
+            "training_metrics_csv": _rel(output_dir, training_metrics_csv_copy_path),
+            "latest_checkpoint": latest_checkpoint_copy_path,
+            "best_checkpoint": _rel(output_dir, best_checkpoint_path),
+            "final_checkpoint": _rel(output_dir, final_checkpoint_path),
         },
         "quality": {
             **quality,
@@ -619,11 +668,15 @@ def package_dataset_sample(
     validation_samples_path: str | None = None,
     validation_metrics_path: str | None = None,
     validation_history_path: str | None = None,
+    training_metrics_csv_path: str | None = None,
     feature_artifacts: dict[str, object] | None = None,
     selected_label: str = "best",
     export_geometry_npz: bool = True,
     quality_gate: str = "default",
     curriculum_state: dict[str, object] | None = None,
+    latest_checkpoint_path: str | None = None,
+    best_checkpoint_path: str | None = None,
+    final_checkpoint_path: str | None = None,
 ) -> str:
     created_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     manifest = build_manifest(
@@ -650,11 +703,15 @@ def package_dataset_sample(
         validation_samples_path=validation_samples_path,
         validation_metrics_path=validation_metrics_path,
         validation_history_path=validation_history_path,
+        training_metrics_csv_path=training_metrics_csv_path,
         feature_artifacts=feature_artifacts,
         selected_label=selected_label,
         export_geometry_npz=export_geometry_npz,
         quality_gate=quality_gate,
         curriculum_state=curriculum_state,
+        latest_checkpoint_path=latest_checkpoint_path,
+        best_checkpoint_path=best_checkpoint_path,
+        final_checkpoint_path=final_checkpoint_path,
     )
     return write_manifest(manifest, output_dir)
 
@@ -674,6 +731,7 @@ def package_skipped_dataset_sample(
     training_command: str,
     quality_gate: str,
     log_path: str | None = None,
+    training_metrics_csv_path: str | None = None,
 ) -> str:
     created_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     manifest = build_skipped_manifest(
@@ -691,6 +749,7 @@ def package_skipped_dataset_sample(
         training_command=training_command,
         quality_gate=quality_gate,
         log_path=log_path,
+        training_metrics_csv_path=training_metrics_csv_path,
     )
     return write_manifest(manifest, output_dir)
 
@@ -711,6 +770,7 @@ def package_failed_dataset_sample(
     quality_gate: str,
     failure_reason: str,
     log_path: str | None = None,
+    training_metrics_csv_path: str | None = None,
 ) -> str:
     created_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     manifest = build_skipped_manifest(
@@ -730,5 +790,6 @@ def package_failed_dataset_sample(
         log_path=log_path,
         sample_state="failed",
         failure_reason=failure_reason,
+        training_metrics_csv_path=training_metrics_csv_path,
     )
     return write_manifest(manifest, output_dir)

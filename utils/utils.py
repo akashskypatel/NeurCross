@@ -46,11 +46,19 @@ def normalize_mesh_export(mesh, file_out=None):
     return mesh
 
 
+def _log_identity_from_handle(log_file):
+    identity = getattr(log_file, "_neurcross_log_identity", None)
+    if identity:
+        return identity
+    return "pid={}".format(os.getpid())
+
+
 def log_string(out_str, log_file):
     # helper function to log a string to file and print it
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    identity = _log_identity_from_handle(log_file)
     lines = out_str.splitlines() or ['']
-    formatted = '\n'.join(f'[{timestamp}] {line}' for line in lines)
+    formatted = '\n'.join(f'[{timestamp}] [{identity}] {line}' for line in lines)
     log_file.write(formatted + '\n')
     log_file.flush()
     try:
@@ -65,6 +73,18 @@ def setup_out_dir_only_log(out_dir, args=None):
     os.makedirs(out_dir, exist_ok=True)
     log_filename = os.path.join(out_dir, 'out.log')
     log_file = open(log_filename, 'w')
+    identity_parts = ["pid={}".format(os.getpid())]
+    device = getattr(args, "device", None) if args is not None else None
+    if device:
+        identity_parts.append("device={}".format(device))
+    sample_id = getattr(args, "sample_id", None) if args is not None else None
+    if sample_id:
+        identity_parts.append("sample={}".format(sample_id))
+    else:
+        data_path = getattr(args, "data_path", None) if args is not None else None
+        if data_path:
+            identity_parts.append("mesh={}".format(os.path.basename(data_path)))
+    log_file._neurcross_log_identity = " ".join(identity_parts)
 
     if args is not None:
         log_string("input params: \n" + str(args), log_file)
