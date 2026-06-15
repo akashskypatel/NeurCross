@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import glob
 import json
+import math
 import os
 import shutil
 from datetime import datetime, timezone
@@ -88,9 +89,28 @@ def _copy_required(source_path: str, destination_path: str) -> str:
 def _write_json(path: str, payload: dict[str, object]) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
+        json.dump(_sanitize_json_value(payload), handle, indent=2, sort_keys=True, allow_nan=False)
         handle.write("\n")
     return path
+
+
+def _sanitize_json_value(value):
+    if isinstance(value, dict):
+        return {key: _sanitize_json_value(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_json_value(child) for child in value]
+    if isinstance(value, tuple):
+        return [_sanitize_json_value(child) for child in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
+
+
+def _json_safe_float(value) -> float | None:
+    if value is None:
+        return None
+    coerced = float(value)
+    return coerced if math.isfinite(coerced) else None
 
 
 def _rel(root: str, path: str | None) -> str | None:
@@ -104,7 +124,7 @@ def _build_acceptance_report(*, preflight_report: dict, best_metrics: dict, qual
         "accepted": bool(quality["accepted"]),
         "quality_grade": quality["quality_grade"],
         "quality_gate": quality["quality_gate"],
-        "field_score": float(quality["field_score"]),
+        "field_score": _json_safe_float(quality.get("field_score")),
         "failure_reason": quality["failure_reason"],
         "failed_threshold_checks": list(quality.get("failed_checks", [])),
         "warning_threshold_checks": list(quality.get("warning_checks", [])),
@@ -439,7 +459,7 @@ def build_skipped_manifest(
         "accepted": False,
         "quality_grade": "D",
         "quality_gate": quality_gate,
-        "field_score": float("inf"),
+        "field_score": None,
         "failure_reason": failure_reason or preflight_report.get("skip_reason") or "mesh_preflight_rejected",
         "failed_checks": [failure_reason or preflight_report.get("skip_reason") or "mesh_preflight_rejected"],
         "warning_checks": [],
@@ -639,7 +659,7 @@ def write_manifest(manifest: dict, output_dir: str) -> str:
     validate_manifest(manifest, output_dir)
     path = os.path.join(output_dir, "manifest.json")
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
-        json.dump(manifest, handle, indent=2, sort_keys=True)
+        json.dump(_sanitize_json_value(manifest), handle, indent=2, sort_keys=True, allow_nan=False)
         handle.write("\n")
     return path
 
