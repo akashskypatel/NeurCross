@@ -27,6 +27,10 @@ def _load_runtime_dependencies():
         from torchinfo import summary
     except ImportError:
         summary = None
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+    except ImportError:
+        SummaryWriter = None
 
     from models import Network_predict_angle
     from models import MorseLoss_quad_mesh as MorseLoss
@@ -37,6 +41,7 @@ def _load_runtime_dependencies():
         'torch': torch,
         'optim': optim,
         'summary': summary,
+        'SummaryWriter': SummaryWriter,
         'Network_predict_angle': Network_predict_angle,
         'MorseLoss': MorseLoss,
         'utils': utils,
@@ -350,6 +355,26 @@ def _append_training_metrics_csv(
         writer.writerow({name: sanitized_row.get(name, "") for name in fieldnames})
 
 
+def _append_tensorboard_scalars(writer, row: dict[str, object], global_step: int) -> None:
+    if writer is None:
+        return
+    import math
+
+    for key, value in row.items():
+        if key in {"pid", "device", "sample_id", "data_path", "curriculum_stage"}:
+            continue
+        if isinstance(value, bool):
+            writer.add_scalar(f"train/{key}", int(value), global_step)
+            continue
+        if isinstance(value, int):
+            writer.add_scalar(f"train/{key}", value, global_step)
+            continue
+        if isinstance(value, float):
+            if math.isfinite(value):
+                writer.add_scalar(f"train/{key}", value, global_step)
+            continue
+
+
 def _evaluate_validation_metrics(
     *,
     net,
@@ -649,6 +674,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     torch = deps['torch']
     optim = deps['optim']
     summary = deps['summary']
+    SummaryWriter = deps['SummaryWriter']
     Network_predict_angle = deps['Network_predict_angle']
     MorseLoss = deps['MorseLoss']
     utils = deps['utils']
@@ -674,9 +700,38 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         checkpoint_dir = os.path.join(out_dir, args.checkpoint_dir)
     os.makedirs(checkpoint_dir, exist_ok=True)
     run_start_time = time.perf_counter()
+    training_metrics_csv_path = os.path.join(out_dir, "metrics", "training_metrics.csv")
+    tensorboard_dir = args.tensorboard_dir or os.path.join(out_dir, "logs", "tensorboard")
+    tensorboard_writer = None
 
     # set up logging
     log_file = utils.setup_out_dir_only_log(out_dir, args)
+
+    def _close_tensorboard_writer() -> None:
+        nonlocal tensorboard_writer
+        if tensorboard_writer is not None:
+            tensorboard_writer.flush()
+            tensorboard_writer.close()
+            tensorboard_writer = None
+
+    if getattr(args, "tensorboard", True):
+        if SummaryWriter is None:
+            utils.log_string("TensorBoard disabled because tensorboard is not installed.", log_file)
+        else:
+            os.makedirs(tensorboard_dir, exist_ok=True)
+            tensorboard_writer = SummaryWriter(log_dir=tensorboard_dir)
+            tensorboard_writer.add_text(
+                "run/identity",
+                "pid={} device={} sample_id={} data_path={}".format(
+                    os.getpid(),
+                    args.device,
+                    getattr(args, "sample_id", ""),
+                    getattr(args, "data_path", ""),
+                ),
+                0,
+            )
+            tensorboard_writer.add_text("run/argv", " ".join(argv or []), 0)
+            tensorboard_writer.add_text("run/args_json", json.dumps(vars(args), indent=2, sort_keys=True), 0)
     input_dir = os.path.join(out_dir, "input")
     mesh_report_path = os.path.join(out_dir, "mesh_quality_report.json")
 
@@ -707,6 +762,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 log_path=log_file.name,
             )
         log_file.close()
+        _close_tensorboard_writer()
         return TrainingResult(
             args=args,
             output_dir=out_dir,
@@ -809,6 +865,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         if getattr(args, "dataset_root", None):
             failure_message = "{}: {}".format(type(exc).__name__, exc)
             utils.log_string("Dataset-label setup failed: {}".format(failure_message), log_file)
+            _close_tensorboard_writer()
             failed_out_dir, _failed_log_path, _failed_manifest_path = _capture_failed_dataset_run(
                 args=args,
                 argv=argv,
@@ -824,6 +881,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 "Dataset-label setup failed; artifacts captured under {}".format(failed_out_dir)
             ) from exc
         log_file.close()
+        _close_tensorboard_writer()
         raise
     steps_per_epoch = len(train_dataloader)
     if steps_per_epoch != steps_per_epoch_target:
@@ -994,7 +1052,6 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     weights_path = None
     manifest_path = None
     sdf_samples_path = None
-    training_metrics_csv_path = os.path.join(out_dir, "metrics", "training_metrics.csv")
     best_loss = min(loss_history) if loss_history else float('inf')
     last_epoch = start_epoch
     last_batch_idx = start_batch_idx
@@ -1267,6 +1324,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                     if loss_dict.get("metrics"):
                         _flatten_metric_mapping("", loss_dict["metrics"], csv_row)
                     _append_training_metrics_csv(training_metrics_csv_path, csv_row)
+                    _append_tensorboard_scalars(tensorboard_writer, csv_row, global_step)
                     utils.log_string('', log_file)
 
                 if early_stopper is not None:
@@ -1352,6 +1410,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                         global_step=next_global_step,
                     )
                     validation_history.append(validation_metrics_step)
+                    _append_tensorboard_scalars(
+                        tensorboard_writer,
+                        {f"validation_step_{key}": value for key, value in validation_metrics_step.items()},
+                        next_global_step,
+                    )
                     utils.log_string(
                         "Validation: global_step={} score={:.6f}".format(
                             next_global_step,
@@ -1368,10 +1431,12 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 break
     except Exception as exc:
         if "artifacts captured under" in str(exc):
+            _close_tensorboard_writer()
             raise
         if getattr(args, "dataset_root", None):
             failure_message = "training_loop_failed: {}: {}".format(type(exc).__name__, exc)
             utils.log_string("Dataset-label training failed: {}".format(failure_message), log_file)
+            _close_tensorboard_writer()
             failed_out_dir, _failed_log_path, _failed_manifest_path = _capture_failed_dataset_run(
                 args=args,
                 argv=argv,
@@ -1386,6 +1451,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             raise RuntimeError(
                 "Dataset-label training failed; artifacts captured under {}".format(failed_out_dir)
             ) from exc
+        _close_tensorboard_writer()
         raise
 
     try:
@@ -1410,6 +1476,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 checkpoint_format=args.checkpoint_format,
             )
         log_path = log_file.name
+        _close_tensorboard_writer()
         log_file.close()
         if getattr(args, "export_sdf_samples", False):
             sdf_samples_path = export_sdf_samples(
@@ -1444,6 +1511,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             validation_metrics,
             filename="validation_metrics_final.json",
         )
+        _append_tensorboard_scalars(
+            tensorboard_writer,
+            {f"validation_final_{key}": value for key, value in validation_metrics.items()},
+            max(next_global_step - 1, 0),
+        )
         validation_history.append(validation_metrics)
         validation_history_path = _write_validation_history_artifact(out_dir, validation_history)
         validation_metrics_path = validation_metrics_final_path
@@ -1474,6 +1546,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 best_validation_metrics,
                 filename="validation_metrics_best.json",
             )
+            _append_tensorboard_scalars(
+                tensorboard_writer,
+                {f"validation_best_{key}": value for key, value in best_validation_metrics.items()},
+                int(best_checkpoint.metadata.global_step),
+            )
             if float(best_validation_metrics["score"]) <= float(validation_metrics["score"]):
                 selected_label = "best"
                 validation_metrics_path = _copy_json_file(
@@ -1498,6 +1575,14 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 validation_metrics_final_path,
                 os.path.join(out_dir, "metrics", "validation_metrics.json"),
             )
+        _append_tensorboard_scalars(
+            tensorboard_writer,
+            {
+                "run_total_elapsed_seconds": float(total_elapsed),
+                "run_stopped_early": bool(stopped_early),
+            },
+            max(next_global_step - 1, 0),
+        )
         if getattr(args, "dataset_root", None):
             from neurcross import __version__ as neurcross_version
 
@@ -1564,6 +1649,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     except Exception as exc:
         if getattr(args, "dataset_root", None):
             failure_message = "training_finalize_failed: {}: {}".format(type(exc).__name__, exc)
+            _close_tensorboard_writer()
             failed_out_dir, _failed_log_path, _failed_manifest_path = _capture_failed_dataset_run(
                 args=args,
                 argv=argv,
@@ -1578,6 +1664,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             raise RuntimeError(
                 "Dataset-label finalization failed; artifacts captured under {}".format(failed_out_dir)
             ) from exc
+        _close_tensorboard_writer()
         raise
     return TrainingResult(
         args=args,

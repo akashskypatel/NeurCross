@@ -143,6 +143,13 @@ def test_explicit_cuda_device_arg_parses():
     assert args.device == "cuda:1"
 
 
+def test_tensorboard_args_parse():
+    args = get_args(["--tensorboard_dir", "runs/custom", "--no-tensorboard"])
+
+    assert args.tensorboard is False
+    assert args.tensorboard_dir == "runs/custom"
+
+
 def test_resolve_device_accepts_explicit_cuda_index():
     fake_torch = SimpleNamespace(
         cuda=SimpleNamespace(

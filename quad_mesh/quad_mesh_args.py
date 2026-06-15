@@ -273,6 +273,18 @@ def add_args(parser):
     parser.add_argument('--log_interval', type=int, default=10,
                         help='number of batches between training log updates')
     parser.add_argument(
+        '--tensorboard',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='write TensorBoard scalar summaries alongside the text log and CSV metrics',
+    )
+    parser.add_argument(
+        '--tensorboard_dir',
+        type=str,
+        default=None,
+        help='optional TensorBoard event-file directory; defaults to <out_dir>/logs/tensorboard',
+    )
+    parser.add_argument(
         '--early_stop',
         action='store_true',
         help='enable early stopping based on smoothed loss plateau and optional theta thresholds',
