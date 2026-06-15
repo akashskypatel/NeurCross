@@ -1366,27 +1366,27 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                             },
                             is_final=True,
                         )
-                    utils.log_string(
-                        "Early stopping triggered at global_step={} epoch={} batch_idx={} reason={} "
-                        "smooth_loss={:.6f} best_smooth_loss={:.6f} best_step={}".format(
-                            global_step,
+                        utils.log_string(
+                            "Early stopping triggered at global_step={} epoch={} batch_idx={} reason={} "
+                            "smooth_loss={:.6f} best_smooth_loss={:.6f} best_step={}".format(
+                                global_step,
+                                epoch,
+                                batch_idx,
+                                stop_summary['reason'],
+                                stop_summary['smooth_loss'],
+                                stop_summary['best_smooth_loss'],
+                                stop_summary['best_step'],
+                            ),
+                            log_file,
+                        )
+                        checkpoint_path = _save_training_checkpoint(
+                            _with_checkpoint_extension("early_stop_checkpoint"),
                             epoch,
                             batch_idx,
-                            stop_summary['reason'],
-                            stop_summary['smooth_loss'],
-                            stop_summary['best_smooth_loss'],
-                            stop_summary['best_step'],
-                        ),
-                        log_file,
-                    )
-                    checkpoint_path = _save_training_checkpoint(
-                        _with_checkpoint_extension("early_stop_checkpoint"),
-                        epoch,
-                        batch_idx,
-                        global_step + 1,
-                    )
-                    stopped_early = True
-                    break
+                            global_step + 1,
+                        )
+                        stopped_early = True
+                        break
 
                 eval_interval_steps = max(int(getattr(args, "eval_interval_steps", 0)), 0)
                 if eval_interval_steps > 0 and next_global_step % eval_interval_steps == 0:
