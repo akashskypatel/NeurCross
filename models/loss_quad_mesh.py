@@ -239,6 +239,7 @@ class MorseLoss_quad_mesh(nn.Module):
     def _build_metrics(self, loss, sdf_term, inter_term, eikonal_term, morse_loss,
                        theta_hessian_term, theta_neighbors_term, vector_alpha, vector_beta,
                        mnfld_n_gt, neighbors_term, neighbor_mask):
+        metrics_device = vector_alpha.device
         normals = mnfld_n_gt.squeeze(0)
         alpha_norm = vector_alpha.norm(dim=-1)
         beta_norm = vector_beta.norm(dim=-1)
@@ -259,8 +260,8 @@ class MorseLoss_quad_mesh(nn.Module):
         else:
             smooth_mean = smooth_median = smooth_p95 = smooth_max = 0.0
 
-        face_indices = self._group_face_indices
-        face_mask = self._group_face_mask
+        face_indices = self._group_face_indices.to(metrics_device)
+        face_mask = self._group_face_mask.to(metrics_device)
         expanded_neighbor_errors = neighbors_term * neighbor_mask.to(neighbors_term.dtype)
         face_error_count = neighbor_mask.to(expanded_neighbor_errors.dtype).sum(dim=2).clamp_min(1.0)
         face_avg_error_group = expanded_neighbor_errors.sum(dim=2) / face_error_count
