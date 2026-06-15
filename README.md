@@ -265,7 +265,7 @@ The training entry point accepts the following arguments.
 | `--device` | `auto` | Training device. `auto` uses CUDA when available, otherwise CPU. Use `cpu` to avoid GPU memory pressure, `cuda` to require CUDA, or `cuda:N` to target a specific GPU such as `cuda:0` or `cuda:1`. |
 | `--max_topology_memory_gb` | `8.0` | Preflight guard for cached mesh topology tensors. If the estimated cache exceeds this value, training stops before allocation with guidance. Set to `0` or a negative value to disable the guard. |
 | `--log_interval` | `10` | Number of batches between training log updates. The same cadence is used for `metrics/training_metrics.csv`. |
-| `--tensorboard` / `--no-tensorboard` | enabled | Enables TensorBoard event-file emission for training and validation scalars. |
+| `--tensorboard` / `--no-tensorboard` | disabled | Enables TensorBoard event-file emission for training and validation scalars. |
 | `--tensorboard_dir` | `<out_dir>\logs\tensorboard` | Optional TensorBoard event-file directory. |
 | `--init_type` | `siren` | Decoder initialization strategy. The help text lists `siren`, `geometric_sine`, `geometric_relu`, and `mfgi`. |
 | `--decoder_hidden_dim` | `256` | Width of the decoder hidden layers. |
@@ -384,7 +384,7 @@ Generated metrics and logs:
 - `metrics/training_metrics.csv` writes one row every `--log_interval` batches
 - the CSV includes run identity, progress, learning rate, batch timing, elapsed time, current loss weights, weighted losses, and unweighted losses
 - the text log now prefixes entries with an identity tag so concurrent subprocesses and GPU-specific runs can be distinguished
-- TensorBoard event files are written under `logs/tensorboard/` by default and mirror the same training cadence for live notebook monitoring
+- TensorBoard event files are written under `logs/tensorboard/` when `--tensorboard` is enabled and mirror the same training cadence for live notebook monitoring
 
 After samples exist, NeurCross can build a dataset index and deterministic shape-level splits:
 

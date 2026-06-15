@@ -275,7 +275,7 @@ def add_args(parser):
     parser.add_argument(
         '--tensorboard',
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help='write TensorBoard scalar summaries alongside the text log and CSV metrics',
     )
     parser.add_argument(

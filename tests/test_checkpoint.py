@@ -144,10 +144,16 @@ def test_explicit_cuda_device_arg_parses():
 
 
 def test_tensorboard_args_parse():
-    args = get_args(["--tensorboard_dir", "runs/custom", "--no-tensorboard"])
+    args = get_args(["--tensorboard_dir", "runs/custom", "--tensorboard"])
+
+    assert args.tensorboard is True
+    assert args.tensorboard_dir == "runs/custom"
+
+
+def test_tensorboard_default_is_disabled():
+    args = get_args([])
 
     assert args.tensorboard is False
-    assert args.tensorboard_dir == "runs/custom"
 
 
 def test_resolve_device_accepts_explicit_cuda_index():

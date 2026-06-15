@@ -27,10 +27,6 @@ def _load_runtime_dependencies():
         from torchinfo import summary
     except ImportError:
         summary = None
-    try:
-        from torch.utils.tensorboard import SummaryWriter
-    except ImportError:
-        SummaryWriter = None
 
     from models import Network_predict_angle
     from models import MorseLoss_quad_mesh as MorseLoss
@@ -41,7 +37,6 @@ def _load_runtime_dependencies():
         'torch': torch,
         'optim': optim,
         'summary': summary,
-        'SummaryWriter': SummaryWriter,
         'Network_predict_angle': Network_predict_angle,
         'MorseLoss': MorseLoss,
         'utils': utils,
@@ -674,7 +669,6 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     torch = deps['torch']
     optim = deps['optim']
     summary = deps['summary']
-    SummaryWriter = deps['SummaryWriter']
     Network_predict_angle = deps['Network_predict_angle']
     MorseLoss = deps['MorseLoss']
     utils = deps['utils']
@@ -714,9 +708,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             tensorboard_writer.close()
             tensorboard_writer = None
 
-    if getattr(args, "tensorboard", True):
-        if SummaryWriter is None:
-            utils.log_string("TensorBoard disabled because tensorboard is not installed.", log_file)
+    if getattr(args, "tensorboard", False):
+        try:
+            from torch.utils.tensorboard import SummaryWriter
+        except Exception as exc:
+            utils.log_string("TensorBoard disabled because initialization failed: {}".format(exc), log_file)
         else:
             os.makedirs(tensorboard_dir, exist_ok=True)
             tensorboard_writer = SummaryWriter(log_dir=tensorboard_dir)
