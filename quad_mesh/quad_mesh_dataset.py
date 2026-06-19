@@ -257,9 +257,13 @@ class ReconDataset(data.Dataset):
         rng = self._rng_for_index(0, validation=True)
         nonmnfld_points, labels = self._sample_nonmanifold_points(rng, self.n_points)
         near_points = self._sample_near_surface_points(rng, self.points.shape[0])
+        feature_sample_size = min(self.points.shape[0], max(1, min(128, self.points.shape[0])))
+        nonzero_feature_count = int(np.count_nonzero(self.feature_face_weights))
+        if nonzero_feature_count > 0:
+            feature_sample_size = min(feature_sample_size, nonzero_feature_count)
         feature_indices = rng.choice(
             self.points.shape[0],
-            size=min(self.points.shape[0], max(1, min(128, self.points.shape[0]))),
+            size=feature_sample_size,
             replace=False,
             p=self.feature_face_weights,
         )

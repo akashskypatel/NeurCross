@@ -11,6 +11,33 @@ def _write_box_mesh(tmp_path, name="box.obj"):
     return mesh_path
 
 
+def _write_planar_grid_mesh(tmp_path, name="plane.obj", grid_size=16):
+    vertices = []
+    for y in range(grid_size + 1):
+        for x in range(grid_size + 1):
+            vertices.append([float(x), float(y), 0.0])
+    vertices = np.asarray(vertices, dtype=np.float32)
+
+    def vertex_index(x, y):
+        return y * (grid_size + 1) + x
+
+    faces = []
+    for y in range(grid_size):
+        for x in range(grid_size):
+            v00 = vertex_index(x, y)
+            v10 = vertex_index(x + 1, y)
+            v01 = vertex_index(x, y + 1)
+            v11 = vertex_index(x + 1, y + 1)
+            faces.append([v00, v10, v11])
+            faces.append([v00, v11, v01])
+    faces = np.asarray(faces, dtype=np.int64)
+
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    mesh_path = tmp_path / name
+    mesh.export(mesh_path)
+    return mesh_path
+
+
 def test_dataset_uniform_sampling_respects_extent(tmp_path):
     from quad_mesh.quad_mesh_dataset import ReconDataset
 
@@ -81,6 +108,20 @@ def test_dataset_validation_batch_is_fixed(tmp_path):
     assert "validation_face_indices" in first
     assert "validation_feature_indices" in first
     assert "validation_boundary_indices" in first
+
+
+def test_dataset_validation_batch_handles_sparse_feature_weights(tmp_path):
+    from quad_mesh.quad_mesh_dataset import ReconDataset
+
+    mesh_path = _write_planar_grid_mesh(tmp_path, grid_size=16)
+    dataset = ReconDataset(str(mesh_path), n_points=48, n_samples=1, nonmnfld_sample_type="mixed", seed=99)
+
+    validation_batch = dataset.get_validation_batch()
+    nonzero_feature_count = int(np.count_nonzero(dataset.feature_face_weights))
+
+    assert validation_batch["validation_face_indices"].size > 0
+    assert validation_batch["validation_face_indices"].size <= nonzero_feature_count
+    assert validation_batch["validation_feature_indices"].size == validation_batch["validation_face_indices"].size
 
 
 def test_dataset_parser_accepts_new_sampling_controls():
