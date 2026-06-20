@@ -716,9 +716,18 @@ def validate_manifest(manifest: dict, output_dir: str) -> None:
 def write_manifest(manifest: dict, output_dir: str) -> str:
     validate_manifest(manifest, output_dir)
     path = os.path.join(output_dir, "manifest.json")
-    with open(path, "w", encoding="utf-8", newline="\n") as handle:
-        json.dump(_sanitize_json_value(manifest), handle, indent=2, sort_keys=True, allow_nan=False)
-        handle.write("\n")
+    tmp_path = os.path.join(output_dir, "tmp.manifest.json")
+    payload = _sanitize_json_value(manifest)
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+    try:
+        with open(tmp_path, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
+            handle.write("\n")
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
     return path
 
 

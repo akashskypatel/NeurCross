@@ -275,6 +275,8 @@ def test_validate_manifest_accepts_minimum_schema(tmp_path):
     path = write_manifest(manifest, str(tmp_path))
     persisted = json.loads(open(path, "r", encoding="utf-8").read())
     assert persisted["sample_id"] == "sample-001"
+    assert path == str(tmp_path / "manifest.json")
+    assert not (tmp_path / "tmp.manifest.json").exists()
 
 
 def test_validate_manifest_rejects_missing_required_field(tmp_path):

@@ -880,6 +880,7 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             tensorboard_writer.add_text("run/args_json", json.dumps(vars(args), indent=2, sort_keys=True), 0)
     input_dir = os.path.join(out_dir, "input")
     mesh_report_path = os.path.join(out_dir, "mesh_quality_report.json")
+    os.makedirs(input_dir, exist_ok=True)
 
     preflight_report, prepared_mesh = inspect_mesh_path(args.data_path)
     preflight_report = _enforce_preflight_policy(preflight_report, getattr(args, "preflight_policy", "repair"))

@@ -92,7 +92,7 @@ def test_generate_label_batch_writes_summary_and_continues(tmp_path, monkeypatch
 
     dataset_root = tmp_path / "dataset"
 
-    def _fake_train(*, args, allow_multiprocessing_workers):
+    def _fake_train(*, args, allow_multiprocessing_workers, argv=None, **_kwargs):
         sample_dir = Path(args.dataset_root) / args.sample_id
         sample_dir.mkdir(parents=True, exist_ok=True)
         manifest = {
@@ -143,7 +143,7 @@ def test_generate_label_batch_fail_fast_stops_on_first_failure(tmp_path, monkeyp
 
     calls = []
 
-    def _fake_train(*, args, allow_multiprocessing_workers):
+    def _fake_train(*, args, allow_multiprocessing_workers, argv=None, **_kwargs):
         calls.append(os.path.basename(args.data_path))
         raise RuntimeError("forced-fail-fast")
 
@@ -218,7 +218,7 @@ def test_generate_label_setup_failure_captures_failed_artifacts(tmp_path, monkey
     def _boom(*args, **kwargs):
         raise RuntimeError("forced-normalize-failure")
 
-    monkeypatch.setattr(normalize_mod, "export_normalized_mesh", _boom)
+    monkeypatch.setattr(normalize_mod, "normalize_mesh", _boom)
 
     dataset_root = tmp_path / "dataset"
     try:
@@ -259,7 +259,7 @@ def test_generate_label_batch_outputs_can_build_dataset_index_and_splits(tmp_pat
 
     dataset_root = tmp_path / "dataset"
 
-    def _fake_train(*, args, allow_multiprocessing_workers):
+    def _fake_train(*, args, allow_multiprocessing_workers, argv=None, **_kwargs):
         mesh_name = os.path.basename(args.data_path)
         if mesh_name == "a.obj":
             destination = "accepted"
