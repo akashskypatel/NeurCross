@@ -15,14 +15,6 @@ def _detached_cpu_tensor(value):
     return value
 
 
-def _detached_tensor(value):
-    if value is None:
-        return None
-    if isinstance(value, torch.Tensor):
-        return value.detach()
-    return value
-
-
 class CrossFieldExportManager:
     def __init__(self, out_dir, filename):
         self.output_dir = os.path.join(out_dir, 'save_crossField')
@@ -471,21 +463,20 @@ class MorseLoss_quad_mesh(nn.Module):
         metrics = None
 
         if save_best or is_final_export or collect_metrics:
-            with torch.no_grad():
-                metrics = self._build_metrics(
-                    _detached_tensor(loss),
-                    _detached_tensor(sdf_term),
-                    _detached_tensor(inter_term),
-                    _detached_tensor(eikonal_term),
-                    _detached_tensor(morse_loss),
-                    _detached_tensor(theta_hessian_term),
-                    _detached_tensor(theta_neighbors_term),
-                    _detached_tensor(vector_alpha),
-                    _detached_tensor(vector_beta),
-                    _detached_tensor(mnfld_n_gt),
-                    _detached_tensor(neighbors_term),
-                    _detached_tensor(neighbor_mask),
-                )
+            metrics = self._build_metrics(
+                _detached_cpu_tensor(loss),
+                _detached_cpu_tensor(sdf_term),
+                _detached_cpu_tensor(inter_term),
+                _detached_cpu_tensor(eikonal_term),
+                _detached_cpu_tensor(morse_loss),
+                _detached_cpu_tensor(theta_hessian_term),
+                _detached_cpu_tensor(theta_neighbors_term),
+                _detached_cpu_tensor(vector_alpha),
+                _detached_cpu_tensor(vector_beta),
+                _detached_cpu_tensor(mnfld_n_gt),
+                _detached_cpu_tensor(neighbors_term),
+                _detached_cpu_tensor(neighbor_mask),
+            )
             if (save_best or is_final_export) and self._export_manager is None:
                 self._export_manager = CrossFieldExportManager(
                     out_dir,
