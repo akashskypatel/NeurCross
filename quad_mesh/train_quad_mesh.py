@@ -120,6 +120,15 @@ def _runtime_memory_snapshot(torch, device) -> str:
         return f"device_memory=unavailable ({type(exc).__name__}: {exc})"
 
 
+def _append_cpu_worker_log(log_path: str | None, message: str) -> None:
+    if not log_path:
+        return
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, "a", encoding="utf-8", newline="\n") as handle:
+        handle.write(message.rstrip())
+        handle.write("\n")
+
+
 @dataclass
 class TrainingResult:
     args: object
@@ -141,13 +150,22 @@ def _export_cpu_side_artifacts_sync(payload: dict[str, object]) -> dict[str, obj
     from .feature_artifacts import export_feature_artifacts
     from .sdf_samples import export_sdf_samples
 
+    worker_log_path = payload.get("log_path")
     normalized_obj_path = str(payload["normalized_obj_path"])
     normalized_ply_path = str(payload["normalized_ply_path"])
+    _append_cpu_worker_log(
+        worker_log_path,
+        "[cpu-export] loading normalized mesh obj={}".format(normalized_obj_path),
+    )
     normalized_mesh = trimesh.load(normalized_obj_path, force="mesh", process=False)
     if not isinstance(normalized_mesh, trimesh.Trimesh):
         raise ValueError(f"mesh did not load as a single triangle mesh: {normalized_obj_path}")
 
     os.makedirs(os.path.dirname(normalized_ply_path), exist_ok=True)
+    _append_cpu_worker_log(
+        worker_log_path,
+        "[cpu-export] writing normalized ply path={}".format(normalized_ply_path),
+    )
     normalized_mesh.export(normalized_ply_path)
 
     result = {
@@ -156,13 +174,28 @@ def _export_cpu_side_artifacts_sync(payload: dict[str, object]) -> dict[str, obj
         "sdf_samples_path": None,
     }
     if bool(payload.get("export_features", False)):
+        _append_cpu_worker_log(
+            worker_log_path,
+            "[cpu-export] exporting feature artifacts output_dir={}".format(payload["features_output_dir"]),
+        )
         result["feature_artifacts"] = export_feature_artifacts(
             mesh=normalized_mesh,
             output_dir=str(payload["features_output_dir"]),
             feature_mode=str(payload["feature_mode"]),
             angle_threshold_degrees=float(payload["feature_angle_threshold"]),
         )
+        _append_cpu_worker_log(
+            worker_log_path,
+            "[cpu-export] feature artifacts complete feature_edges={} structure_edges={}".format(
+                result["feature_artifacts"].get("feature_edge_count", 0),
+                result["feature_artifacts"].get("structure_edge_count", 0),
+            ),
+        )
     if bool(payload.get("export_sdf_samples", False)):
+        _append_cpu_worker_log(
+            worker_log_path,
+            "[cpu-export] exporting sdf samples output_dir={}".format(payload["sdf_output_dir"]),
+        )
         result["sdf_samples_path"] = export_sdf_samples(
             mesh_path=normalized_obj_path,
             output_dir=str(payload["sdf_output_dir"]),
@@ -175,6 +208,14 @@ def _export_cpu_side_artifacts_sync(payload: dict[str, object]) -> dict[str, obj
             uniform_extent=float(payload["sdf_uniform_extent"]),
             tsdf_truncation=float(payload["tsdf_truncation"]),
         )
+        _append_cpu_worker_log(
+            worker_log_path,
+            "[cpu-export] sdf export complete path={}".format(result["sdf_samples_path"]),
+        )
+    _append_cpu_worker_log(
+        worker_log_path,
+        "[cpu-export] all sequential artifact stages complete",
+    )
     return result
 
 
@@ -213,22 +254,16 @@ def _launch_cpu_artifact_worker(*, args, out_dir: str, normalized_export, log_fi
     with open(payload_path, "w", encoding="utf-8", newline="\n") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    worker_argv = [sys.executable, "-m", "quad_mesh.train_quad_mesh", "_cpu_export_artifacts", payload_path]
-    worker_env = os.environ.copy()
-    worker_env["CUDA_VISIBLE_DEVICES"] = ""
-    worker_env.setdefault("PYTORCH_NO_CUDA_MEMORY_CACHING", "1")
-    proc = subprocess.Popen(
-        worker_argv,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        env=worker_env,
-    )
     log_file.write(
-        "[cpu-export] launched subprocess pid={} payload={}\n".format(proc.pid, payload_path)
+        "[cpu-export] deferred sequential worker prepared payload={} result_path={}\n".format(
+            payload_path,
+            result_path,
+        )
     )
     log_file.flush()
     return {
-        "process": proc,
+        "process": None,
+        "payload": payload,
         "payload_path": payload_path,
         "result_path": result_path,
     }
@@ -252,6 +287,7 @@ def _build_cpu_artifact_payload(*, args, out_dir: str, normalized_export, result
         "sdf_near_sigma": float(args.sdf_near_sigma),
         "sdf_uniform_extent": float(args.sdf_uniform_extent),
         "tsdf_truncation": float(args.tsdf_truncation),
+        "log_path": os.path.join(out_dir, "logs", "cpu_artifact_worker.log"),
         "result_path": result_path,
     }
 
@@ -259,6 +295,36 @@ def _build_cpu_artifact_payload(*, args, out_dir: str, normalized_export, result
 def _collect_cpu_artifact_worker(worker_state, *, out_dir: str, normalized_export, args, log_file):
     if worker_state is None:
         return _export_cpu_side_artifacts_sync(_build_cpu_artifact_payload(args=args, out_dir=out_dir, normalized_export=normalized_export))
+    if worker_state.get("process") is None:
+        payload = dict(worker_state["payload"])
+        _append_cpu_worker_log(
+            payload.get("log_path"),
+            "[cpu-export] starting deferred sequential artifact processing",
+        )
+        try:
+            result = _export_cpu_side_artifacts_sync(payload)
+            response = {"ok": True, "result": result}
+            with open(worker_state["result_path"], "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(response, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+            return result
+        except Exception as exc:
+            response = {
+                "ok": False,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+            with open(worker_state["result_path"], "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(response, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+            _append_cpu_worker_log(
+                payload.get("log_path"),
+                "[cpu-export] deferred sequential artifact processing failed {}: {}".format(
+                    type(exc).__name__,
+                    exc,
+                ),
+            )
+            raise
     proc = worker_state["process"]
     stderr_text = ""
     try:
@@ -1038,7 +1104,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     except Exception as exc:
         if cpu_artifact_worker is not None:
             try:
-                cpu_artifact_worker["process"].terminate()
+                if cpu_artifact_worker.get("process") is not None:
+                    cpu_artifact_worker["process"].terminate()
             except OSError:
                 pass
         if getattr(args, "dataset_root", None):
@@ -1386,7 +1453,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 except Exception as exc:
                     if cpu_artifact_worker is not None:
                         try:
-                            cpu_artifact_worker["process"].terminate()
+                            if cpu_artifact_worker.get("process") is not None:
+                                cpu_artifact_worker["process"].terminate()
                         except OSError:
                             pass
                     if getattr(args, "dataset_root", None):
@@ -1633,7 +1701,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     except Exception as exc:
         if cpu_artifact_worker is not None:
             try:
-                cpu_artifact_worker["process"].terminate()
+                if cpu_artifact_worker.get("process") is not None:
+                    cpu_artifact_worker["process"].terminate()
             except OSError:
                 pass
         if "artifacts captured under" in str(exc):
@@ -1889,7 +1958,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     except Exception as exc:
         if cpu_artifact_worker is not None:
             try:
-                cpu_artifact_worker["process"].terminate()
+                if cpu_artifact_worker.get("process") is not None:
+                    cpu_artifact_worker["process"].terminate()
             except OSError:
                 pass
         if getattr(args, "dataset_root", None):
