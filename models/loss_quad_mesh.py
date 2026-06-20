@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import math
 import torch
 import torch.nn as nn
 
@@ -13,6 +14,12 @@ def _detached_cpu_tensor(value):
     if isinstance(value, torch.Tensor):
         return value.detach().to(device="cpu")
     return value
+
+
+def _cpu_chunk_tensor(value, start: int, end: int):
+    if isinstance(value, torch.Tensor):
+        return value[start:end].detach().to(device="cpu")
+    return value[start:end]
 
 
 class CrossFieldExportManager:
@@ -335,6 +342,209 @@ class MorseLoss_quad_mesh(nn.Module):
             "score": float(score),
         }
 
+    def _build_metrics_chunked_cpu(
+        self,
+        loss,
+        sdf_term,
+        inter_term,
+        eikonal_term,
+        morse_loss,
+        theta_hessian_term,
+        theta_neighbors_term,
+        vector_alpha,
+        vector_beta,
+        mnfld_n_gt,
+        neighbors_term,
+        neighbor_mask,
+        *,
+        face_chunk_size: int = 8192,
+        group_chunk_size: int = 256,
+        log_label: str | None = None,
+    ):
+        num_faces = int(vector_alpha.shape[0])
+        num_groups = int(self._group_face_mask.shape[0])
+        max_neighbors = int(neighbor_mask.shape[-1])
+        if log_label:
+            print(
+                f"[metrics-cpu] start {log_label} faces={num_faces} groups={num_groups} max_neighbors={max_neighbors} "
+                f"face_chunk_size={face_chunk_size} group_chunk_size={group_chunk_size}",
+                flush=True,
+            )
+
+        alpha_norm_err_sum = 0.0
+        beta_norm_err_sum = 0.0
+        alpha_beta_dot_sum = 0.0
+        alpha_tangent_sum = 0.0
+        beta_tangent_sum = 0.0
+        handedness_sum = 0.0
+        flipped_count = 0.0
+        alpha_norm_err_max = 0.0
+        beta_norm_err_max = 0.0
+        alpha_beta_dot_max = 0.0
+        alpha_tangent_max = 0.0
+        beta_tangent_max = 0.0
+        handedness_min = float("inf")
+        nan_count = 0
+
+        normals_all = mnfld_n_gt.squeeze(0)
+        for start in range(0, num_faces, face_chunk_size):
+            end = min(start + face_chunk_size, num_faces)
+            alpha_chunk = _cpu_chunk_tensor(vector_alpha, start, end)
+            beta_chunk = _cpu_chunk_tensor(vector_beta, start, end)
+            normals_chunk = _cpu_chunk_tensor(normals_all, start, end)
+
+            alpha_norm = alpha_chunk.norm(dim=-1)
+            beta_norm = beta_chunk.norm(dim=-1)
+            alpha_unit = alpha_chunk / (alpha_norm.unsqueeze(-1) + 1e-12)
+            beta_unit = beta_chunk / (beta_norm.unsqueeze(-1) + 1e-12)
+
+            alpha_beta_dot = (alpha_unit * beta_unit).sum(dim=-1).abs()
+            alpha_tangent = (alpha_unit * normals_chunk).sum(dim=-1).abs()
+            beta_tangent = (beta_unit * normals_chunk).sum(dim=-1).abs()
+            handedness = torch.linalg.cross(alpha_unit, beta_unit).mul(normals_chunk).sum(dim=-1)
+
+            alpha_norm_err = (alpha_norm - 1.0).abs()
+            beta_norm_err = (beta_norm - 1.0).abs()
+
+            alpha_norm_err_sum += float(alpha_norm_err.sum().item())
+            beta_norm_err_sum += float(beta_norm_err.sum().item())
+            alpha_beta_dot_sum += float(alpha_beta_dot.sum().item())
+            alpha_tangent_sum += float(alpha_tangent.sum().item())
+            beta_tangent_sum += float(beta_tangent.sum().item())
+            handedness_sum += float(handedness.sum().item())
+            flipped_count += float((handedness < 0.0).to(torch.float32).sum().item())
+
+            alpha_norm_err_max = max(alpha_norm_err_max, float(alpha_norm_err.max().item()))
+            beta_norm_err_max = max(beta_norm_err_max, float(beta_norm_err.max().item()))
+            alpha_beta_dot_max = max(alpha_beta_dot_max, float(alpha_beta_dot.max().item()))
+            alpha_tangent_max = max(alpha_tangent_max, float(alpha_tangent.max().item()))
+            beta_tangent_max = max(beta_tangent_max, float(beta_tangent.max().item()))
+            handedness_min = min(handedness_min, float(handedness.min().item()))
+
+            nan_count += int(
+                torch.isnan(alpha_chunk).sum().item()
+                + torch.isnan(beta_chunk).sum().item()
+                + torch.isinf(alpha_chunk).sum().item()
+                + torch.isinf(beta_chunk).sum().item()
+            )
+
+        valid_neighbor_chunks = []
+        singularity_proxy_count = 0
+        singularity_proxy_badness_sum = 0.0
+        singularity_proxy_badness_max = 0.0
+        vertex_proxy_badness_chunks = []
+        singularity_threshold = 0.25
+
+        for start in range(0, num_groups, group_chunk_size):
+            end = min(start + group_chunk_size, num_groups)
+            neighbors_chunk = _cpu_chunk_tensor(neighbors_term, start, end)
+            neighbor_mask_chunk = _cpu_chunk_tensor(neighbor_mask, start, end)
+            valid_chunk = neighbors_chunk[neighbor_mask_chunk]
+            if valid_chunk.numel() > 0:
+                valid_neighbor_chunks.append(valid_chunk.reshape(-1))
+
+            chunk_face_mask = self._group_face_mask[start:end].detach().to(device="cpu")
+            expanded_neighbor_errors = neighbors_chunk * neighbor_mask_chunk.to(neighbors_chunk.dtype)
+            face_error_count = neighbor_mask_chunk.to(expanded_neighbor_errors.dtype).sum(dim=2).clamp_min(1.0)
+            face_avg_error_group = expanded_neighbor_errors.sum(dim=2) / face_error_count
+            face_mask_float = chunk_face_mask.to(face_avg_error_group.dtype)
+            vertex_proxy_badness_chunk = (
+                (face_avg_error_group * face_mask_float).sum(dim=1)
+                / face_mask_float.sum(dim=1).clamp_min(1.0)
+            )
+            singularity_proxy_chunk = vertex_proxy_badness_chunk > singularity_threshold
+            singularity_proxy_count += int(singularity_proxy_chunk.sum().item())
+            singularity_proxy_badness_sum += float(vertex_proxy_badness_chunk.sum().item())
+            singularity_proxy_badness_max = max(
+                singularity_proxy_badness_max,
+                float(vertex_proxy_badness_chunk.max().item()) if vertex_proxy_badness_chunk.numel() else 0.0,
+            )
+            if vertex_proxy_badness_chunk.numel() > 0:
+                vertex_proxy_badness_chunks.append(vertex_proxy_badness_chunk.reshape(-1))
+
+        if valid_neighbor_chunks:
+            valid_neighbor_errors = torch.cat(valid_neighbor_chunks, dim=0)
+            smooth_mean = float(valid_neighbor_errors.mean().item())
+            smooth_median = float(valid_neighbor_errors.median().item())
+            smooth_p95 = float(torch.quantile(valid_neighbor_errors, 0.95).item())
+            smooth_max = float(valid_neighbor_errors.max().item())
+        else:
+            smooth_mean = smooth_median = smooth_p95 = smooth_max = 0.0
+
+        if vertex_proxy_badness_chunks:
+            vertex_proxy_badness_all = torch.cat(vertex_proxy_badness_chunks, dim=0)
+            singularity_proxy_ratio = float(singularity_proxy_count / max(int(vertex_proxy_badness_all.numel()), 1))
+            singularity_proxy_badness_mean = float(vertex_proxy_badness_sum / max(int(vertex_proxy_badness_all.numel()), 1))
+            singularity_proxy_badness_p95 = float(torch.quantile(vertex_proxy_badness_all, 0.95).item())
+        else:
+            singularity_proxy_ratio = 0.0
+            singularity_proxy_badness_mean = 0.0
+            singularity_proxy_badness_p95 = 0.0
+
+        training_metrics = {
+            "loss_total": float(loss.detach().cpu().item()),
+            "loss_mnfld": float(sdf_term.detach().cpu().item()),
+            "loss_nonmnfld": float(inter_term.detach().cpu().item()),
+            "loss_eikonal": float(eikonal_term.detach().cpu().item()),
+            "loss_morse": float(morse_loss.detach().cpu().item()),
+            "loss_theta_hessian": float(theta_hessian_term.detach().cpu().item()),
+            "loss_theta_neighbor": float(theta_neighbors_term.detach().cpu().item()),
+        }
+        denom_faces = max(num_faces, 1)
+        field_validity = {
+            "num_faces": num_faces,
+            "nan_count": nan_count,
+            "alpha_norm_error_mean": alpha_norm_err_sum / denom_faces,
+            "alpha_norm_error_max": alpha_norm_err_max,
+            "beta_norm_error_mean": beta_norm_err_sum / denom_faces,
+            "beta_norm_error_max": beta_norm_err_max,
+            "alpha_beta_dot_mean": alpha_beta_dot_sum / denom_faces,
+            "alpha_beta_dot_max": alpha_beta_dot_max,
+            "alpha_tangent_error_mean": alpha_tangent_sum / denom_faces,
+            "alpha_tangent_error_max": alpha_tangent_max,
+            "beta_tangent_error_mean": beta_tangent_sum / denom_faces,
+            "beta_tangent_error_max": beta_tangent_max,
+            "handedness_mean": handedness_sum / denom_faces,
+            "handedness_min": handedness_min if math.isfinite(handedness_min) else 0.0,
+            "flipped_frame_ratio": flipped_count / denom_faces,
+        }
+        field_smoothness = {
+            "adjacent_cross_error_mean": smooth_mean,
+            "adjacent_cross_error_median": smooth_median,
+            "adjacent_cross_error_p95": smooth_p95,
+            "adjacent_cross_error_max": smooth_max,
+        }
+        singularity_metrics = {
+            "singularity_proxy_threshold": singularity_threshold,
+            "singularity_proxy_count": singularity_proxy_count,
+            "singularity_proxy_ratio": singularity_proxy_ratio,
+            "singularity_proxy_badness_mean": singularity_proxy_badness_mean,
+            "singularity_proxy_badness_p95": singularity_proxy_badness_p95,
+            "singularity_proxy_badness_max": singularity_proxy_badness_max,
+        }
+        score = (
+            training_metrics["loss_theta_hessian"]
+            + training_metrics["loss_theta_neighbor"]
+            + 10.0 * field_smoothness["adjacent_cross_error_mean"]
+            + 50.0 * field_validity["flipped_frame_ratio"]
+            + 10.0 * field_validity["alpha_tangent_error_mean"]
+            + 10.0 * field_validity["beta_tangent_error_mean"]
+        )
+        if log_label:
+            print(
+                f"[metrics-cpu] complete {log_label} score={float(score):.6f} "
+                f"faces={num_faces} groups={num_groups} valid_neighbor_values="
+                f"{sum(int(chunk.numel()) for chunk in valid_neighbor_chunks)}",
+                flush=True,
+            )
+        return {
+            "training": training_metrics,
+            "field_validity": field_validity,
+            "field_smoothness": field_smoothness,
+            "singularity_proxy": singularity_metrics,
+            "score": float(score),
+        }
+
 
 
     def forward(self, output_pred, mnfld_points, nonmnfld_points, mnfld_n_gt=None, near_points=None, batch_idx=0,
@@ -463,19 +673,26 @@ class MorseLoss_quad_mesh(nn.Module):
         metrics = None
 
         if save_best or is_final_export or collect_metrics:
-            metrics = self._build_metrics(
-                _detached_cpu_tensor(loss),
-                _detached_cpu_tensor(sdf_term),
-                _detached_cpu_tensor(inter_term),
-                _detached_cpu_tensor(eikonal_term),
-                _detached_cpu_tensor(morse_loss),
-                _detached_cpu_tensor(theta_hessian_term),
-                _detached_cpu_tensor(theta_neighbors_term),
-                _detached_cpu_tensor(vector_alpha),
-                _detached_cpu_tensor(vector_beta),
-                _detached_cpu_tensor(mnfld_n_gt),
-                _detached_cpu_tensor(neighbors_term),
-                _detached_cpu_tensor(neighbor_mask),
+            if is_final_export:
+                metrics_log_label = "final_export"
+            elif save_best:
+                metrics_log_label = f"save_best_step_{batch_idx}"
+            else:
+                metrics_log_label = f"collect_metrics_step_{batch_idx}"
+            metrics = self._build_metrics_chunked_cpu(
+                loss,
+                sdf_term,
+                inter_term,
+                eikonal_term,
+                morse_loss,
+                theta_hessian_term,
+                theta_neighbors_term,
+                vector_alpha,
+                vector_beta,
+                mnfld_n_gt,
+                neighbors_term,
+                neighbor_mask,
+                log_label=metrics_log_label,
             )
             if (save_best or is_final_export) and self._export_manager is None:
                 self._export_manager = CrossFieldExportManager(
