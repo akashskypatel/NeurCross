@@ -474,7 +474,9 @@ class MorseLoss_quad_mesh(nn.Module):
         if vertex_proxy_badness_chunks:
             vertex_proxy_badness_all = torch.cat(vertex_proxy_badness_chunks, dim=0)
             singularity_proxy_ratio = float(singularity_proxy_count / max(int(vertex_proxy_badness_all.numel()), 1))
-            singularity_proxy_badness_mean = float(vertex_proxy_badness_sum / max(int(vertex_proxy_badness_all.numel()), 1))
+            singularity_proxy_badness_mean = float(
+                singularity_proxy_badness_sum / max(int(vertex_proxy_badness_all.numel()), 1)
+            )
             singularity_proxy_badness_p95 = float(torch.quantile(vertex_proxy_badness_all, 0.95).item())
         else:
             singularity_proxy_ratio = 0.0
