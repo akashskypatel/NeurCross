@@ -99,6 +99,27 @@ def _raise_cuda_oom_guidance(exc, *, context):
     raise RuntimeError(message) from exc
 
 
+def _runtime_memory_snapshot(torch, device) -> str:
+    if not _is_cuda_device(device):
+        return "device_memory=cpu"
+    try:
+        device_index = _cuda_device_index(device)
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device_index)
+        allocated = torch.cuda.memory_allocated(device_index)
+        reserved = torch.cuda.memory_reserved(device_index)
+        max_allocated = torch.cuda.max_memory_allocated(device_index)
+        return (
+            "device_memory="
+            f"free={free_bytes / (1024 ** 3):.2f}GiB "
+            f"total={total_bytes / (1024 ** 3):.2f}GiB "
+            f"allocated={allocated / (1024 ** 3):.2f}GiB "
+            f"reserved={reserved / (1024 ** 3):.2f}GiB "
+            f"max_allocated={max_allocated / (1024 ** 3):.2f}GiB"
+        )
+    except Exception as exc:
+        return f"device_memory=unavailable ({type(exc).__name__}: {exc})"
+
+
 @dataclass
 class TrainingResult:
     args: object
@@ -1318,6 +1339,15 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 features = torch.cat((mnfld_points, angle_feature_static), dim=-1)
 
                 try:
+                    if is_final_batch:
+                        utils.log_string(
+                            "Final batch start: global_step={} batch_idx={} {}".format(
+                                global_step,
+                                batch_idx,
+                                _runtime_memory_snapshot(torch, device),
+                            ),
+                            log_file,
+                        )
                     output_pred, mnfld_pts_theta_output_pred = net(nonmnfld_points, mnfld_points,
                                                                    near_points=near_points if args.morse_near else None,
                                                                    angle_features=features)
@@ -1329,6 +1359,14 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                                           local_coord_u=local_coord_u, local_coord_v=local_coord_v,
                                           is_final_export=is_final_batch,
                                           collect_metrics=False)
+                    if is_final_batch:
+                        utils.log_string(
+                            "Final batch criterion complete: global_step={} {}".format(
+                                global_step,
+                                _runtime_memory_snapshot(torch, device),
+                            ),
+                            log_file,
+                        )
                 except torch.cuda.OutOfMemoryError as exc:
                     _raise_cuda_oom_guidance(exc, context="forward/loss computation")
 
@@ -1629,11 +1667,25 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             utils.log_string("Training stopped early in {}".format(_format_duration(total_elapsed)), log_file)
         else:
             utils.log_string("Training finished in {}".format(_format_duration(total_elapsed)), log_file)
+        utils.log_string(
+            "Finalization start: {} {}".format(
+                out_dir,
+                _runtime_memory_snapshot(torch, device),
+            ),
+            log_file,
+        )
         final_checkpoint_path = _save_training_checkpoint(
             _with_checkpoint_extension("final_checkpoint"),
             last_epoch,
             last_batch_idx,
             next_global_step,
+        )
+        utils.log_string(
+            "Final checkpoint saved: path={} {}".format(
+                final_checkpoint_path,
+                _runtime_memory_snapshot(torch, device),
+            ),
+            log_file,
         )
         checkpoint_path = final_checkpoint_path
         if args.export_weights_only:
@@ -1647,6 +1699,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         _close_tensorboard_writer()
         log_file.close()
         with open(log_path, "a", encoding="utf-8", newline="\n") as cpu_log_file:
+            cpu_log_file.write(
+                "[finalization] collecting cpu artifacts {}\n".format(
+                    _runtime_memory_snapshot(torch, device),
+                )
+            )
             cpu_artifacts = _collect_cpu_artifact_worker(
                 cpu_artifact_worker,
                 out_dir=out_dir,
@@ -1657,6 +1714,12 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         normalized_export.ply_path = str(cpu_artifacts["normalized_mesh_ply_path"])
         feature_artifacts = cpu_artifacts.get("feature_artifacts")
         sdf_samples_path = cpu_artifacts.get("sdf_samples_path")
+        with open(log_path, "a", encoding="utf-8", newline="\n") as cpu_log_file:
+            cpu_log_file.write(
+                "[finalization] running final validation {}\n".format(
+                    _runtime_memory_snapshot(torch, device),
+                )
+            )
         validation_metrics = _evaluate_validation_metrics(
             net=net,
             criterion=criterion,
@@ -1688,6 +1751,13 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         if args.save_best_by == "quad_score":
             raise NotImplementedError("--save_best_by quad_score is not implemented yet")
         if args.save_best_by == "val_field_score" and best_checkpoint_path:
+            with open(log_path, "a", encoding="utf-8", newline="\n") as cpu_log_file:
+                cpu_log_file.write(
+                    "[finalization] evaluating best checkpoint {} path={}\n".format(
+                        _runtime_memory_snapshot(torch, device),
+                        best_checkpoint_path,
+                    )
+                )
             best_checkpoint = load_checkpoint(best_checkpoint_path, device=device)
             final_state_dict = net.state_dict()
             net.load_state_dict(best_checkpoint.model_state_dict)
@@ -1793,6 +1863,10 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 best_checkpoint_path=best_checkpoint_path,
                 final_checkpoint_path=final_checkpoint_path,
             )
+            with open(log_path, "a", encoding="utf-8", newline="\n") as cpu_log_file:
+                cpu_log_file.write(
+                    "[finalization] manifest written path={}\n".format(manifest_path)
+                )
             with open(manifest_path, "r", encoding="utf-8") as handle:
                 manifest = json.load(handle)
             recommended_destination = manifest["quality"].get("recommended_destination")
