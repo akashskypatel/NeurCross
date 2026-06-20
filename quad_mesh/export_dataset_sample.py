@@ -267,6 +267,38 @@ def build_manifest(
         feature_artifacts.get("face_feature_distance_path"),
         os.path.join(features_dir, "face_feature_distance.npy"),
     )
+    edges_unique_copy_path = _copy_or_keep(
+        feature_artifacts.get("edges_unique_path"),
+        os.path.join(features_dir, "edges_unique.npy"),
+    )
+    edge_sharpness_copy_path = _copy_or_keep(
+        feature_artifacts.get("edge_sharpness_path"),
+        os.path.join(features_dir, "edge_sharpness.npy"),
+    )
+    edge_dihedral_degrees_copy_path = _copy_or_keep(
+        feature_artifacts.get("edge_dihedral_degrees_path"),
+        os.path.join(features_dir, "edge_dihedral_degrees.npy"),
+    )
+    edge_is_boundary_copy_path = _copy_or_keep(
+        feature_artifacts.get("edge_is_boundary_path"),
+        os.path.join(features_dir, "edge_is_boundary.npy"),
+    )
+    salient_edge_mask_copy_path = _copy_or_keep(
+        feature_artifacts.get("salient_edge_mask_path"),
+        os.path.join(features_dir, "salient_edge_mask.npy"),
+    )
+    structure_edge_labels_copy_path = _copy_or_keep(
+        feature_artifacts.get("structure_edge_labels_path"),
+        os.path.join(features_dir, "structure_edge_labels.npy"),
+    )
+    structure_lines_copy_path = _copy_or_keep(
+        feature_artifacts.get("structure_lines_path"),
+        os.path.join(features_dir, "structure_lines.json"),
+    )
+    structure_quality_metrics_copy_path = _copy_or_keep(
+        feature_artifacts.get("structure_quality_metrics_path"),
+        os.path.join(features_dir, "structure_quality_metrics.json"),
+    )
     log_copy_path = _copy_required(log_path, os.path.join(logs_dir, "train.log"))
     latest_checkpoint_copy_path = _copy_checkpoint_if_exists(latest_checkpoint_path, checkpoints_dir)
     best_checkpoint_copy_path = _copy_checkpoint_if_exists(best_checkpoint_path, checkpoints_dir)
@@ -332,6 +364,11 @@ def build_manifest(
             "feature_constrained": bool(feature_artifacts.get("feature_constrained", False)),
             "feature_edge_count": int(feature_artifacts.get("feature_edge_count", 0)),
             "feature_vertex_count": int(feature_artifacts.get("feature_vertex_count", 0)),
+            "boundary_edge_count": int(feature_artifacts.get("boundary_edge_count", 0)),
+            "sharp_edge_count": int(feature_artifacts.get("sharp_edge_count", 0)),
+            "structure_edge_count": int(feature_artifacts.get("structure_edge_count", 0)),
+            "edge_sharpness_mean": _json_safe_float(feature_artifacts.get("edge_sharpness_mean")),
+            "edge_sharpness_max": _json_safe_float(feature_artifacts.get("edge_sharpness_max")),
         },
         "training": {
             "tool": "neurcross",
@@ -365,6 +402,14 @@ def build_manifest(
             "feature_vertices_npy": _rel(output_dir, feature_vertices_copy_path),
             "feature_lines_json": _rel(output_dir, feature_lines_copy_path),
             "face_feature_distance_npy": _rel(output_dir, face_feature_distance_copy_path),
+            "edges_unique_npy": _rel(output_dir, edges_unique_copy_path),
+            "edge_sharpness_npy": _rel(output_dir, edge_sharpness_copy_path),
+            "edge_dihedral_degrees_npy": _rel(output_dir, edge_dihedral_degrees_copy_path),
+            "edge_is_boundary_npy": _rel(output_dir, edge_is_boundary_copy_path),
+            "salient_edge_mask_npy": _rel(output_dir, salient_edge_mask_copy_path),
+            "structure_edge_labels_npy": _rel(output_dir, structure_edge_labels_copy_path),
+            "structure_lines_json": _rel(output_dir, structure_lines_copy_path),
+            "structure_quality_metrics_json": _rel(output_dir, structure_quality_metrics_copy_path),
             "log_path": _rel(output_dir, log_copy_path),
             "command_path": _rel(output_dir, command_txt_path),
             "training_metrics_csv": _rel(output_dir, training_metrics_csv_copy_path),
@@ -528,6 +573,11 @@ def build_skipped_manifest(
             "feature_constrained": False,
             "feature_edge_count": 0,
             "feature_vertex_count": 0,
+            "boundary_edge_count": 0,
+            "sharp_edge_count": 0,
+            "structure_edge_count": 0,
+            "edge_sharpness_mean": 0.0,
+            "edge_sharpness_max": 0.0,
         },
         "training": {
             "tool": "neurcross",
@@ -561,6 +611,14 @@ def build_skipped_manifest(
             "feature_vertices_npy": None,
             "feature_lines_json": None,
             "face_feature_distance_npy": None,
+            "edges_unique_npy": None,
+            "edge_sharpness_npy": None,
+            "edge_dihedral_degrees_npy": None,
+            "edge_is_boundary_npy": None,
+            "salient_edge_mask_npy": None,
+            "structure_edge_labels_npy": None,
+            "structure_lines_json": None,
+            "structure_quality_metrics_json": None,
             "log_path": _rel(output_dir, log_copy_path),
             "command_path": _rel(output_dir, command_txt_path),
             "training_metrics_csv": _rel(output_dir, training_metrics_csv_copy_path),

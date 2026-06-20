@@ -114,6 +114,156 @@ class TrainingResult:
     manifest_path: str | None = None
 
 
+def _export_cpu_side_artifacts_sync(payload: dict[str, object]) -> dict[str, object]:
+    import trimesh
+
+    from .feature_artifacts import export_feature_artifacts
+    from .sdf_samples import export_sdf_samples
+
+    normalized_obj_path = str(payload["normalized_obj_path"])
+    normalized_ply_path = str(payload["normalized_ply_path"])
+    normalized_mesh = trimesh.load(normalized_obj_path, force="mesh", process=False)
+    if not isinstance(normalized_mesh, trimesh.Trimesh):
+        raise ValueError(f"mesh did not load as a single triangle mesh: {normalized_obj_path}")
+
+    os.makedirs(os.path.dirname(normalized_ply_path), exist_ok=True)
+    normalized_mesh.export(normalized_ply_path)
+
+    result = {
+        "normalized_mesh_ply_path": normalized_ply_path,
+        "feature_artifacts": None,
+        "sdf_samples_path": None,
+    }
+    if bool(payload.get("export_features", False)):
+        result["feature_artifacts"] = export_feature_artifacts(
+            mesh=normalized_mesh,
+            output_dir=str(payload["features_output_dir"]),
+            feature_mode=str(payload["feature_mode"]),
+            angle_threshold_degrees=float(payload["feature_angle_threshold"]),
+        )
+    if bool(payload.get("export_sdf_samples", False)):
+        result["sdf_samples_path"] = export_sdf_samples(
+            mesh_path=normalized_obj_path,
+            output_dir=str(payload["sdf_output_dir"]),
+            normalization=dict(payload["normalization"]),
+            seed=int(payload["seed"]),
+            n_surface=int(payload["sdf_n_surface"]),
+            n_near=int(payload["sdf_n_near"]),
+            n_uniform=int(payload["sdf_n_uniform"]),
+            near_sigma=float(payload["sdf_near_sigma"]),
+            uniform_extent=float(payload["sdf_uniform_extent"]),
+            tsdf_truncation=float(payload["tsdf_truncation"]),
+        )
+    return result
+
+
+def _cpu_artifact_worker(payload_path: str) -> int:
+    result_path = None
+    try:
+        with open(payload_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        result_path = str(payload["result_path"])
+        result = _export_cpu_side_artifacts_sync(payload)
+        response = {"ok": True, "result": result}
+    except Exception as exc:
+        response = {
+            "ok": False,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+    if result_path:
+        os.makedirs(os.path.dirname(result_path), exist_ok=True)
+        with open(result_path, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(response, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+    return 0 if response["ok"] else 1
+
+
+def _launch_cpu_artifact_worker(*, args, out_dir: str, normalized_export, log_file):
+    payload_path = os.path.join(out_dir, "metadata", "cpu_artifact_payload.json")
+    result_path = os.path.join(out_dir, "metadata", "cpu_artifact_result.json")
+    payload = _build_cpu_artifact_payload(
+        args=args,
+        out_dir=out_dir,
+        normalized_export=normalized_export,
+        result_path=result_path,
+    )
+    os.makedirs(os.path.dirname(payload_path), exist_ok=True)
+    with open(payload_path, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    worker_argv = [sys.executable, "-m", "quad_mesh.train_quad_mesh", "_cpu_export_artifacts", payload_path]
+    worker_env = os.environ.copy()
+    worker_env["CUDA_VISIBLE_DEVICES"] = ""
+    worker_env.setdefault("PYTORCH_NO_CUDA_MEMORY_CACHING", "1")
+    proc = subprocess.Popen(
+        worker_argv,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env=worker_env,
+    )
+    log_file.write(
+        "[cpu-export] launched subprocess pid={} payload={}\n".format(proc.pid, payload_path)
+    )
+    log_file.flush()
+    return {
+        "process": proc,
+        "payload_path": payload_path,
+        "result_path": result_path,
+    }
+
+
+def _build_cpu_artifact_payload(*, args, out_dir: str, normalized_export, result_path: str | None = None) -> dict[str, object]:
+    return {
+        "normalized_obj_path": normalized_export.obj_path,
+        "normalized_ply_path": normalized_export.ply_path,
+        "normalization": normalized_export.metadata.to_dict(),
+        "export_features": bool(getattr(args, "export_features", True)),
+        "feature_mode": getattr(args, "feature_mode", "auto"),
+        "feature_angle_threshold": float(getattr(args, "feature_angle_threshold", 35.0)),
+        "features_output_dir": os.path.join(out_dir, "features"),
+        "export_sdf_samples": bool(getattr(args, "export_sdf_samples", False)),
+        "sdf_output_dir": os.path.join(out_dir, "sdf"),
+        "seed": int(args.seed),
+        "sdf_n_surface": int(args.sdf_n_surface),
+        "sdf_n_near": int(args.sdf_n_near),
+        "sdf_n_uniform": int(args.sdf_n_uniform),
+        "sdf_near_sigma": float(args.sdf_near_sigma),
+        "sdf_uniform_extent": float(args.sdf_uniform_extent),
+        "tsdf_truncation": float(args.tsdf_truncation),
+        "result_path": result_path,
+    }
+
+
+def _collect_cpu_artifact_worker(worker_state, *, out_dir: str, normalized_export, args, log_file):
+    if worker_state is None:
+        return _export_cpu_side_artifacts_sync(_build_cpu_artifact_payload(args=args, out_dir=out_dir, normalized_export=normalized_export))
+    proc = worker_state["process"]
+    stderr_text = ""
+    try:
+        _stdout, stderr_text = proc.communicate()
+    finally:
+        stderr_text = (stderr_text or b"").decode("utf-8", errors="replace")
+    if os.path.exists(worker_state["result_path"]):
+        with open(worker_state["result_path"], "r", encoding="utf-8") as handle:
+            response = json.load(handle)
+        if response.get("ok"):
+            return dict(response["result"])
+        log_file.write(
+            "[cpu-export] subprocess failed with {}: {}\n".format(
+                response.get("error_type", "error"),
+                response.get("error", "unknown"),
+            )
+        )
+        if stderr_text.strip():
+            log_file.write("[cpu-export] stderr:\n{}\n".format(stderr_text.strip()))
+        log_file.flush()
+    elif stderr_text.strip():
+        log_file.write("[cpu-export] missing result file; stderr:\n{}\n".format(stderr_text.strip()))
+        log_file.flush()
+    return _export_cpu_side_artifacts_sync(_build_cpu_artifact_payload(args=args, out_dir=out_dir, normalized_export=normalized_export))
+
+
 def _build_training_args(argv=None, args=None, **overrides):
     if args is None:
         resolved = quad_mesh_args.get_args([] if argv is None else argv)
@@ -646,15 +796,13 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         save_model_weights_only,
         utc_timestamp,
     )
-    from .normalize import export_normalized_mesh
+    from .normalize import NormalizationMetadata, NormalizedMeshExport, normalize_mesh
     from .preflight import inspect_mesh_path
     from .export_dataset_sample import (
         package_dataset_sample,
         package_failed_dataset_sample,
         package_skipped_dataset_sample,
     )
-    from .feature_artifacts import export_feature_artifacts
-    from .sdf_samples import export_sdf_samples
 
     # get training parameters
     args = _build_training_args(argv=argv, args=args, **overrides)
@@ -682,6 +830,8 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
     validation_metrics_path = None
     validation_history_path = None
     feature_artifacts = None
+    normalized_export = None
+    cpu_artifact_worker = None
     selected_label = "best"
     validation_history = []
     curriculum_state = None
@@ -775,16 +925,23 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 
     try:
         if getattr(args, "normalize_mesh", True):
-            normalized_export = export_normalized_mesh(prepared_mesh, input_dir)
+            normalized_mesh, normalization_metadata = normalize_mesh(prepared_mesh)
+            normalized_obj_path = os.path.join(input_dir, "normalized_mesh.obj")
+            normalized_ply_path = os.path.join(input_dir, "normalized_mesh.ply")
+            normalized_mesh.export(normalized_obj_path)
+            normalized_export = NormalizedMeshExport(
+                mesh=normalized_mesh,
+                obj_path=normalized_obj_path,
+                ply_path=normalized_ply_path,
+                metadata=normalization_metadata,
+            )
             training_mesh_path = normalized_export.obj_path
         else:
             import numpy as np
-            from .normalize import NormalizationMetadata, NormalizedMeshExport
 
             normalized_obj_path = os.path.join(input_dir, "normalized_mesh.obj")
             normalized_ply_path = os.path.join(input_dir, "normalized_mesh.ply")
             prepared_mesh.export(normalized_obj_path)
-            prepared_mesh.export(normalized_ply_path)
             passthrough_metadata = NormalizationMetadata(
                 center=[0.0, 0.0, 0.0],
                 scale=1.0,
@@ -804,13 +961,12 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             "normalized_mesh_obj": normalized_export.obj_path,
             "normalized_mesh_ply": normalized_export.ply_path,
         }
-        if getattr(args, "export_features", True):
-            feature_artifacts = export_feature_artifacts(
-                mesh=normalized_export.mesh,
-                output_dir=os.path.join(out_dir, "features"),
-                feature_mode=getattr(args, "feature_mode", "auto"),
-                angle_threshold_degrees=getattr(args, "feature_angle_threshold", 35.0),
-            )
+        cpu_artifact_worker = _launch_cpu_artifact_worker(
+            args=args,
+            out_dir=out_dir,
+            normalized_export=normalized_export,
+            log_file=log_file,
+        )
         preflight_report.normalization = normalized_export.metadata.to_dict()
         with open(mesh_report_path, "w", encoding="utf-8") as handle:
             json.dump(preflight_report.to_dict(), handle, indent=2, sort_keys=True)
@@ -858,6 +1014,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             persistent_workers=(args.persistent_workers and args.num_workers > 0),
         )
     except Exception as exc:
+        if cpu_artifact_worker is not None:
+            try:
+                cpu_artifact_worker["process"].terminate()
+            except OSError:
+                pass
         if getattr(args, "dataset_root", None):
             failure_message = "{}: {}".format(type(exc).__name__, exc)
             utils.log_string("Dataset-label setup failed: {}".format(failure_message), log_file)
@@ -1184,6 +1345,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 try:
                     optimizer.step()
                 except Exception as exc:
+                    if cpu_artifact_worker is not None:
+                        try:
+                            cpu_artifact_worker["process"].terminate()
+                        except OSError:
+                            pass
                     if getattr(args, "dataset_root", None):
                         failure_message = "training_step_failed: {}: {}".format(type(exc).__name__, exc)
                         utils.log_string("Dataset-label training failed: {}".format(failure_message), log_file)
@@ -1426,6 +1592,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
             if current_global_step >= total_steps:
                 break
     except Exception as exc:
+        if cpu_artifact_worker is not None:
+            try:
+                cpu_artifact_worker["process"].terminate()
+            except OSError:
+                pass
         if "artifacts captured under" in str(exc):
             _close_tensorboard_writer()
             raise
@@ -1474,19 +1645,17 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
         log_path = log_file.name
         _close_tensorboard_writer()
         log_file.close()
-        if getattr(args, "export_sdf_samples", False):
-            sdf_samples_path = export_sdf_samples(
-                mesh_path=normalized_export.obj_path,
-                output_dir=os.path.join(out_dir, "sdf"),
-                normalization=normalized_export.metadata.to_dict(),
-                seed=args.seed,
-                n_surface=args.sdf_n_surface,
-                n_near=args.sdf_n_near,
-                n_uniform=args.sdf_n_uniform,
-                near_sigma=args.sdf_near_sigma,
-                uniform_extent=args.sdf_uniform_extent,
-                tsdf_truncation=args.tsdf_truncation,
+        with open(log_path, "a", encoding="utf-8", newline="\n") as cpu_log_file:
+            cpu_artifacts = _collect_cpu_artifact_worker(
+                cpu_artifact_worker,
+                out_dir=out_dir,
+                normalized_export=normalized_export,
+                args=args,
+                log_file=cpu_log_file,
             )
+        normalized_export.ply_path = str(cpu_artifacts["normalized_mesh_ply_path"])
+        feature_artifacts = cpu_artifacts.get("feature_artifacts")
+        sdf_samples_path = cpu_artifacts.get("sdf_samples_path")
         validation_metrics = _evaluate_validation_metrics(
             net=net,
             criterion=criterion,
@@ -1643,6 +1812,11 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
                 manifest_path = _remap_path(manifest_path, out_dir, accepted_out_dir)
                 out_dir = accepted_out_dir
     except Exception as exc:
+        if cpu_artifact_worker is not None:
+            try:
+                cpu_artifact_worker["process"].terminate()
+            except OSError:
+                pass
         if getattr(args, "dataset_root", None):
             failure_message = "training_finalize_failed: {}: {}".format(type(exc).__name__, exc)
             _close_tensorboard_writer()
@@ -1680,9 +1854,14 @@ def train_crossfield(*, argv=None, args=None, allow_multiprocessing_workers=Fals
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
+    if argv and argv[0] == "_cpu_export_artifacts":
+        if len(argv) != 2:
+            raise ValueError("_cpu_export_artifacts expects exactly one payload path")
+        return _cpu_artifact_worker(argv[1])
     train_crossfield(argv=argv, allow_multiprocessing_workers=True)
+    return 0
 
 
 if __name__ == '__main__':
     freeze_support()
-    main()
+    raise SystemExit(main())
