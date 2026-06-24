@@ -11,7 +11,25 @@ from pathlib import Path
 from . import quad_mesh_args
 
 
-_MESH_EXTENSIONS = {".obj", ".ply", ".off", ".stl"}
+_MESH_EXTENSIONS = {
+    ".obj",
+    ".stl",
+    ".off",
+    ".ply",
+    ".collada",
+    ".glb",
+    ".3mf",
+    ".3dxml",
+    ".dict64",
+    ".msgpack",
+    ".gltf",
+    ".dae",
+    ".zae",
+    ".step",
+    ".stp",
+    ".xaml",
+    ".dxf",
+}
 
 
 def _source_sha256(path: str) -> str:
