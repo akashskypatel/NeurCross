@@ -94,6 +94,25 @@ def test_preflight_marks_multicomponent_mesh_for_review():
     assert report.metrics.connected_components == 2
 
 
+def test_preflight_merges_scene_inputs_automatically(tmp_path):
+    from quad_mesh.preflight import inspect_mesh_path
+
+    left = trimesh.creation.box()
+    right = trimesh.creation.box()
+    right.apply_translation((3.0, 0.0, 0.0))
+    scene = trimesh.Scene([left, right])
+    scene_path = tmp_path / "two_boxes.glb"
+    scene.export(scene_path)
+
+    report, prepared_mesh = inspect_mesh_path(str(scene_path))
+
+    assert prepared_mesh is not None
+    assert report.status == "needs_repair"
+    assert report.metrics.connected_components == 2
+    assert report.metrics.face_count > 0
+    assert report.source_sha256
+
+
 def test_preflight_detects_nonmanifold_edges():
     from quad_mesh.preflight import inspect_mesh
 

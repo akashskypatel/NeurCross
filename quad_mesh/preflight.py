@@ -87,8 +87,7 @@ class MeshPreflightReport:
 def _load_mesh(mesh_path: str, *, allow_scene_merge: bool = False) -> trimesh.Trimesh:
     loaded = trimesh.load(mesh_path, process=False)
     if isinstance(loaded, trimesh.Scene):
-        if not allow_scene_merge:
-            raise ValueError("input resolved to a trimesh.Scene; pass a mesh file or implement scene merging explicitly")
+        allow_scene_merge = True
         if not loaded.geometry:
             raise ValueError("input scene does not contain any mesh geometry")
         loaded = trimesh.util.concatenate(tuple(loaded.geometry.values()))
