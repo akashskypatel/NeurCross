@@ -906,3 +906,18 @@ flowchart TD
     style ReturnResult fill:#87CEEB
 
 ```
+
+## Free GPU/Compute Resources to execute the notebook on
+
+### Tested successfully on:
+
+- https://lightning.ai
+- https://www.kaggle.com
+- https://www.modal.com
+- https://www.coiled.io
+
+## Coiled config
+
+```
+coiled notebook start --vm-type n1-standard-4 --gpu --sync --software neurcross --name neurcross_training --open --region us-central1 || coiled notebook start --vm-type n1-standard-4 --gpu --sync --software neurcross --name neurcross_training --open --region us-east1 || coiled notebook start --vm-type n1-standard-4 --gpu --sync --software neurcross --name neurcross_training --open --region us-east4 || coiled notebook start --vm-type n1-standard-4 --gpu --sync --software neurcross --name neurcross_training --open --region us-west1 || coiled notebook start --vm-type n1-standard-4 --gpu --sync --software neurcross --name neurcross_training --open --region us-west2 || coiled notebook start --vm-type n1-standard-4 --gpu --sync --software neurcross --name neurcross_training --open --region us-west3 || coiled notebook start --vm-type n1-standard-4 --gpu --sync --software neurcross --name neurcross_training --open --region us-west4
+```
