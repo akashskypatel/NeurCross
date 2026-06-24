@@ -1,0 +1,15 @@
+.git
+.gitignore
+.pytest_cache
+.agents
+.claude
+.gitnexus
+build
+data
+tests
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.ipynb_checkpoints
+content

@@ -1,0 +1,48 @@
+services:
+  neurcross-notebook:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: neurcross-notebook:local
+    container_name: neurcross-notebook
+    working_dir: /workspace/third_party/NeurCross
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.local
+        required: false
+      - path: .env.secrets
+        required: false
+    environment:
+      WORKSPACE_ROOT: /workspace/content
+      HF_TOKEN: ${HF_TOKEN:-}
+      GH_TOKEN: ${GH_TOKEN:-}
+      KAGGLE_USERNAME: ${KAGGLE_USERNAME:-}
+      KAGGLE_KEY: ${KAGGLE_KEY:-}
+      PYTORCH_CUDA_ALLOC_CONF: ${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
+      JUPYTER_PORT: 8888
+    ports:
+      - "8888:8888"
+    volumes:
+      - ../..:/workspace
+      - neurcross-pip-cache:/root/.cache/pip
+      - neurcross-hf-cache:/root/.cache/huggingface
+      - neurcross-kaggle-cache:/root/.cache/kagglehub
+      - neurcross-torch-cache:/root/.cache/torch
+    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: "16gb"
+    stdin_open: true
+    tty: true
+
+volumes:
+  neurcross-pip-cache:
+  neurcross-hf-cache:
+  neurcross-kaggle-cache:
+  neurcross-torch-cache:
