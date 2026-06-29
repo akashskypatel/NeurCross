@@ -57,9 +57,15 @@ def _feature_lines(feature_edges: np.ndarray) -> list[dict[str, object]]:
     if feature_edges.size == 0:
         return []
     adjacency: dict[int, set[int]] = {}
+    vertex_edges: dict[int, list[tuple[int, int]]] = {}
     for a, b in feature_edges.tolist():
-        adjacency.setdefault(int(a), set()).add(int(b))
-        adjacency.setdefault(int(b), set()).add(int(a))
+        a_i = int(a)
+        b_i = int(b)
+        edge = (a_i, b_i) if a_i <= b_i else (b_i, a_i)
+        adjacency.setdefault(a_i, set()).add(b_i)
+        adjacency.setdefault(b_i, set()).add(a_i)
+        vertex_edges.setdefault(a_i, []).append(edge)
+        vertex_edges.setdefault(b_i, []).append(edge)
 
     lines = []
     visited: set[int] = set()
@@ -68,27 +74,23 @@ def _feature_lines(feature_edges: np.ndarray) -> list[dict[str, object]]:
             continue
         stack = [start]
         component_vertices = []
-        component_set = set()
+        component_edges: set[tuple[int, int]] = set()
         while stack:
             node = stack.pop()
             if node in visited:
                 continue
             visited.add(node)
-            component_set.add(node)
             component_vertices.append(node)
+            for edge in vertex_edges.get(node, []):
+                component_edges.add(edge)
             for neighbor in adjacency[node]:
                 if neighbor not in visited:
                     stack.append(neighbor)
-        component_edges = [
-            [int(a), int(b)]
-            for a, b in feature_edges.tolist()
-            if int(a) in component_set and int(b) in component_set
-        ]
         lines.append(
             {
                 "vertex_indices": sorted(component_vertices),
                 "edge_count": len(component_edges),
-                "edges": component_edges,
+                "edges": [[a, b] for a, b in sorted(component_edges)],
             }
         )
     return lines

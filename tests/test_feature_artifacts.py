@@ -4,6 +4,22 @@ import numpy as np
 import trimesh
 
 
+def test_feature_lines_handles_many_disconnected_components():
+    from quad_mesh.feature_artifacts import _feature_lines
+
+    feature_edges = np.asarray(
+        [[i * 2, i * 2 + 1] for i in range(256)],
+        dtype=np.int64,
+    )
+
+    lines = _feature_lines(feature_edges)
+
+    assert len(lines) == 256
+    assert all(line["edge_count"] == 1 for line in lines)
+    assert lines[0]["edges"] == [[0, 1]]
+    assert lines[-1]["edges"] == [[510, 511]]
+
+
 def test_feature_detection_finds_cube_edges(tmp_path):
     from quad_mesh.feature_artifacts import export_feature_artifacts
 
