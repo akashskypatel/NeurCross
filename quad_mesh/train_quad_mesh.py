@@ -452,7 +452,16 @@ def _relocate_dataset_sample(args, out_dir: str, destination: str) -> str:
     os.makedirs(os.path.dirname(target_dir), exist_ok=True)
     if os.path.exists(target_dir):
         shutil.rmtree(target_dir)
-    shutil.move(out_dir, target_dir)
+    try:
+        os.rename(out_dir, target_dir)
+    except OSError:
+        try:
+            shutil.copytree(out_dir, target_dir, dirs_exist_ok=True)
+        except Exception:
+            if os.path.exists(target_dir):
+                shutil.rmtree(target_dir, ignore_errors=True)
+            raise
+        shutil.rmtree(out_dir)
     return target_dir
 
 
