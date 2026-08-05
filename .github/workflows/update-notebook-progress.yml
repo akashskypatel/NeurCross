@@ -1,0 +1,50 @@
+name: Update notebook progress dashboard
+
+on:
+  push:
+    branches:
+      - agent/notebook-multidevice-progress
+
+permissions:
+  contents: write
+
+jobs:
+  update-notebook:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update and validate notebook
+        run: |
+          python .github/scripts/update_notebook_progress.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('NeurCross_Training.ipynb')
+          notebook = json.loads(path.read_text(encoding='utf-8'))
+          source = '\n'.join(
+              ''.join(cell.get('source', []))
+              for cell in notebook['cells']
+              if cell.get('cell_type') == 'code'
+          )
+          assert 'class NotebookTrainingDashboard' in source
+          assert 'progress_device=training_device' in source
+          assert 'clear_output' not in source
+          print('Notebook JSON and progress integration checks passed.')
+          PY
+
+      - name: Commit notebook only
+        run: |
+          rm -f .github/scripts/update_notebook_progress.py
+          rm -f .github/workflows/update-notebook-progress.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Add multi-device notebook progress dashboard"
+          git push origin HEAD:agent/notebook-multidevice-progress
