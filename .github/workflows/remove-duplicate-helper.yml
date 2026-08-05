@@ -1,0 +1,31 @@
+name: Remove duplicate notebook helper
+
+on:
+  push:
+    branches:
+      - agent/clean-notebook-progress
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/clean-notebook-progress
+
+      - name: Remove duplicate helper and validate
+        run: python .github/remove_duplicate_helper.py
+
+      - name: Remove temporary updater and commit
+        shell: bash
+        run: |
+          rm .github/remove_duplicate_helper.py
+          rm .github/workflows/remove-duplicate-helper.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add NeurCross_Training.ipynb .github/remove_duplicate_helper.py .github/workflows/remove-duplicate-helper.yml
+          git commit -m "Remove duplicate notebook output helper"
+          git push origin HEAD:agent/clean-notebook-progress
