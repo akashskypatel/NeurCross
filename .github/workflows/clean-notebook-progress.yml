@@ -17,7 +17,18 @@ jobs:
           ref: agent/clean-notebook-progress
 
       - name: Update and validate notebook
-        run: python .github/clean_notebook_progress.py
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/clean_notebook_progress.py')
+          source = path.read_text(encoding='utf-8')
+          old = '"process_sources()\\n"'
+          if old not in source:
+              raise RuntimeError('process_sources rewrite anchor not found')
+          path.write_text(source.replace(old, '"process_sources()"', 1), encoding='utf-8')
+          PY
+          python .github/clean_notebook_progress.py
 
       - name: Remove temporary updater and commit
         shell: bash
