@@ -1,5 +1,7 @@
 import os
 import random
+import re
+import sys
 import warnings
 from datetime import datetime
 
@@ -9,6 +11,131 @@ import numpy as np
 import torch
 from torch.autograd import grad
 import torch.backends.cudnn as cudnn
+
+_TRAINING_SCHEDULE_RE = re.compile(
+    r"\bderived_steps_per_epoch=(?P<steps_per_epoch>\d+).*?"
+    r"\bbatch_size=(?P<batch_size>\d+).*?"
+    r"\btotal_steps=(?P<total_steps>\d+)"
+)
+_TRAINING_LOSS_RE = re.compile(
+    r"^Epoch:\s+(?P<epoch>\d+)\s+"
+    r"\[\s*(?P<n_sample>\d+)/\d+\s+\([^)]*\)\]\s+"
+    r"Loss:\s+(?P<loss>[-+0-9.eE]+)\b"
+)
+_PROGRESS_DETAIL_PREFIXES = ("Weights:", "Timing:")
+_PROGRESS_TERMINAL_PREFIXES = (
+    "Dataset-label training failed:",
+    "Early stopping triggered",
+    "Training stopped early",
+    "Training finished",
+)
+
+
+class _TrainingProgressRenderer:
+    def __init__(self, stream):
+        self.stream = stream
+        self.steps_per_epoch = None
+        self.batch_size = None
+        self.total_steps = None
+        self.header = None
+        self.progress_line = None
+        self.rendered = False
+        self.last_width = 0
+        try:
+            is_tty = bool(stream.isatty())
+        except (AttributeError, OSError):
+            is_tty = False
+        self.use_ansi = is_tty and os.environ.get("TERM", "") != "dumb"
+
+    @property
+    def configured(self):
+        return (
+            self.steps_per_epoch is not None
+            and self.batch_size is not None
+            and self.total_steps is not None
+        )
+
+    def configure(self, *, steps_per_epoch, batch_size, total_steps):
+        self.steps_per_epoch = max(1, int(steps_per_epoch))
+        self.batch_size = max(1, int(batch_size))
+        self.total_steps = max(1, int(total_steps))
+
+    def _safe_write(self, text):
+        try:
+            self.stream.write(text)
+        except UnicodeEncodeError:
+            self.stream.write(text.replace("█", "#").replace("░", "-"))
+        self.stream.flush()
+
+    def _clear_rendered_block(self):
+        if not self.rendered:
+            return
+        if self.use_ansi:
+            self._safe_write("\r\x1b[2K\x1b[1A\r\x1b[2K")
+        else:
+            self._safe_write("\r" + (" " * self.last_width) + "\r")
+        self.rendered = False
+
+    def _draw_saved_block(self):
+        if self.header is None or self.progress_line is None:
+            return
+        if self.use_ansi:
+            self._safe_write(self.header + "\n" + self.progress_line)
+        else:
+            self._safe_write(self.header + "\n\r" + self.progress_line)
+        self.last_width = max(self.last_width, len(self.progress_line))
+        self.rendered = True
+
+    def update(self, *, identity, epoch, n_sample, loss):
+        if not self.configured:
+            return False
+        batch_idx = int(n_sample) // self.batch_size
+        current_step = min(
+            self.total_steps,
+            int(epoch) * self.steps_per_epoch + batch_idx + 1,
+        )
+        ratio = current_step / self.total_steps
+        percent = min(100, max(1 if current_step > 0 else 0, int(ratio * 100.0 + 0.5)))
+        bar_width = 52
+        filled = int(ratio * bar_width + 0.5)
+        if current_step > 0:
+            filled = max(1, filled)
+        filled = min(bar_width, filled)
+        bar = "█" * filled + "░" * (bar_width - filled)
+        self.header = "[{}] [{}]".format(
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            identity,
+        )
+        self.progress_line = (
+            "[{}] {:3d}% ( {}/{}) | Epoch: {} Loss: {:.5f}".format(
+                bar,
+                percent,
+                current_step,
+                self.total_steps,
+                int(epoch),
+                float(loss),
+            )
+        )
+        if self.rendered:
+            self._clear_rendered_block()
+        self._draw_saved_block()
+        return True
+
+    def before_message(self):
+        was_rendered = self.rendered
+        if was_rendered:
+            self._clear_rendered_block()
+        return was_rendered
+
+    def after_message(self, should_redraw):
+        if should_redraw:
+            self._draw_saved_block()
+
+    def finish(self):
+        if self.rendered:
+            self._safe_write("\n")
+            self.rendered = False
+
 
 def same_seed(seed, deterministic=True):
     """
@@ -53,6 +180,14 @@ def _log_identity_from_handle(log_file):
     return "pid={}".format(os.getpid())
 
 
+def _progress_renderer_from_handle(log_file):
+    renderer = getattr(log_file, "_neurcross_progress_renderer", None)
+    if renderer is None:
+        renderer = _TrainingProgressRenderer(sys.stdout)
+        log_file._neurcross_progress_renderer = renderer
+    return renderer
+
+
 def log_string(out_str, log_file):
     # helper function to log a string to file and print it
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -61,10 +196,43 @@ def log_string(out_str, log_file):
     formatted = '\n'.join(f'[{timestamp}] [{identity}] {line}' for line in lines)
     log_file.write(formatted + '\n')
     log_file.flush()
+
+    progress = _progress_renderer_from_handle(log_file)
+    schedule_match = _TRAINING_SCHEDULE_RE.search(out_str)
+    if schedule_match:
+        progress.configure(
+            steps_per_epoch=schedule_match.group("steps_per_epoch"),
+            batch_size=schedule_match.group("batch_size"),
+            total_steps=schedule_match.group("total_steps"),
+        )
+
+    loss_match = _TRAINING_LOSS_RE.match(out_str)
+    if loss_match and progress.update(
+        identity=identity,
+        epoch=loss_match.group("epoch"),
+        n_sample=loss_match.group("n_sample"),
+        loss=loss_match.group("loss"),
+    ):
+        return
+
+    if progress.configured and (
+        out_str.startswith(_PROGRESS_DETAIL_PREFIXES)
+        or "Unweighted L_s" in out_str
+        or out_str == ''
+    ):
+        return
+
+    is_terminal_message = out_str.startswith(_PROGRESS_TERMINAL_PREFIXES)
+    if is_terminal_message:
+        progress.finish()
+        redraw_progress = False
+    else:
+        redraw_progress = progress.before_message()
     try:
         print(formatted)
     except (OSError, UnicodeEncodeError):
         print(formatted.encode('utf-8', errors='replace').decode('utf-8'))
+    progress.after_message(redraw_progress)
 
 
 def setup_out_dir_only_log(out_dir, args=None):
@@ -217,7 +385,6 @@ def get_rotation_matrix(vertex_neighbors_list, vertex_neighbors, mesh_path):
     face_adjacency_angles = mesh.face_adjacency_angles.astype(np.float32)
     face_adjacency_edges = mesh.face_adjacency_edges.astype(np.int32)
     verts = mesh.vertices.astype(np.float32)
-
     rota_axis = verts[face_adjacency_edges[:, 0]] - verts[face_adjacency_edges[:, 1]]
 
     axis_angle_R_mat_list = list()
